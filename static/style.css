@@ -1,0 +1,164 @@
+:root {
+  --bleu: #000091;
+  --bleu-clair: #e3e3fd;
+  --rouge: #c9191e;
+  --vert: #18753c;
+  --vert-clair: #dffee6;
+  --or: #b34000;
+  --fond: #f6f6f6;
+  --carte: #fff;
+  --texte: #161616;
+  --gris: #666;
+  --bord: #ddd;
+  --rayon: 8px;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Marianne, Arial, sans-serif;
+  background: var(--fond);
+  color: var(--texte);
+}
+h1, h2, h3 { margin: 0; }
+h2 { font-size: 1.1rem; }
+button, input, select, textarea { font: inherit; }
+
+button {
+  background: var(--bleu); color: #fff; border: 0; border-radius: 4px;
+  padding: .45rem .9rem; cursor: pointer;
+}
+button:hover { filter: brightness(1.2); }
+button:disabled { background: #bbb; cursor: not-allowed; filter: none; }
+button.secondaire { background: #fff; color: var(--bleu); border: 1px solid var(--bleu); }
+button.danger { background: var(--rouge); }
+button.lien { background: none; color: var(--bleu); padding: 0; text-decoration: underline; }
+input, select, textarea {
+  border: 1px solid #bbb; border-radius: 4px; padding: .4rem .55rem; background: #fff; min-width: 0;
+}
+
+/* En-tête ------------------------------------------------------------- */
+.entete {
+  background: #fff; border-bottom: 4px solid var(--bleu);
+  display: flex; flex-wrap: wrap; gap: 1rem; justify-content: space-between; align-items: center;
+  padding: .9rem clamp(1rem, 3vw, 2rem);
+}
+.marque { display: flex; gap: .8rem; align-items: center; }
+.logo { font-size: 2.2rem; }
+.entete h1 { font-size: 1.5rem; color: var(--bleu); }
+.sous-titre { margin: 0; color: var(--gris); font-size: .9rem; }
+.compte { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; }
+.compte form { display: flex; flex-wrap: wrap; gap: .4rem; }
+.compte input { width: 9rem; }
+.solde { display: flex; gap: 1rem; align-items: center; }
+.solde .bloc { text-align: right; line-height: 1.15; }
+.solde .bloc small { display: block; color: var(--gris); font-size: .75rem; }
+.solde .bloc b { font-size: 1.25rem; color: var(--bleu); }
+
+/* Mise en page ---------------------------------------------------------- */
+.grille {
+  display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 1.5rem;
+  padding: 1.5rem clamp(1rem, 3vw, 2rem); max-width: 1400px; margin: 0 auto;
+}
+@media (max-width: 900px) { .grille { grid-template-columns: 1fr; } }
+.lateral { display: flex; flex-direction: column; gap: 1rem; }
+@media (min-width: 901px) { .lateral { position: sticky; top: 1rem; align-self: start; max-height: calc(100vh - 2rem); overflow-y: auto; } }
+
+.carte {
+  background: var(--carte); border: 1px solid var(--bord); border-radius: var(--rayon);
+  padding: 1rem 1.1rem;
+}
+.carte h2 { margin-bottom: .6rem; }
+.carte-titre { display: flex; justify-content: space-between; align-items: baseline; gap: .5rem; }
+.titre-section { margin: 1.5rem 0 .8rem; }
+.vide { color: var(--gris); font-style: italic; padding: 1rem 0; }
+.aide { color: var(--gris); font-size: .85rem; }
+
+.onglets { display: flex; flex-wrap: wrap; gap: .3rem; margin-bottom: 1rem; border-bottom: 1px solid var(--bord); }
+.onglets button {
+  background: none; color: var(--gris); border-radius: 0; border-bottom: 3px solid transparent;
+  padding: .55rem .9rem; font-weight: 600;
+}
+.onglets button.actif { color: var(--bleu); border-bottom-color: var(--bleu); }
+.onglets .compteur { background: var(--bleu-clair); color: var(--bleu); border-radius: 1rem; padding: 0 .45rem; font-size: .8rem; margin-left: .3rem; }
+
+/* Cartes de pari ---------------------------------------------------------- */
+.liste-paris { display: grid; gap: 1rem; }
+.pari { position: relative; }
+.pari-entete { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin-bottom: .35rem; }
+.pari h3 { font-size: 1.05rem; margin-bottom: .2rem; }
+.pari .desc { color: var(--gris); font-size: .9rem; margin: 0 0 .7rem; }
+.badge {
+  display: inline-block; font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
+  padding: .1rem .5rem; border-radius: 3px; background: var(--bleu-clair); color: var(--bleu);
+}
+.badge.ouvert { background: var(--vert-clair); color: var(--vert); }
+.badge.suspendu, .badge.ferme { background: #feecc2; color: var(--or); }
+.badge.clos { background: #eee; color: #444; }
+.badge.annule { background: #fee; color: var(--rouge); }
+.meta { color: var(--gris); font-size: .82rem; margin-left: auto; }
+
+.issues { display: grid; gap: .45rem; }
+.issue {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .3rem 1rem; align-items: center;
+  border: 1px solid var(--bord); border-radius: 6px; padding: .55rem .7rem; position: relative; overflow: hidden;
+}
+.issue .barre { position: absolute; inset: 0 auto 0 0; background: var(--bleu-clair); opacity: .45; z-index: 0; }
+.issue > *:not(.barre) { position: relative; z-index: 1; }
+.issue .libelle { font-weight: 600; }
+.issue .stats { color: var(--gris); font-size: .8rem; }
+.issue .cote { font-weight: 800; color: var(--bleu); font-size: 1.1rem; white-space: nowrap; }
+.issue .cote small { font-weight: 400; color: var(--gris); font-size: .75rem; margin-left: .3rem; }
+.issue .miser { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+.issue .miser input { width: 7rem; }
+.issue .gain { font-size: .85rem; color: var(--vert); }
+.issue.gagnante { border-color: var(--vert); background: var(--vert-clair); }
+.issue.gagnante .libelle::after { content: " ✓ issue réalisée"; color: var(--vert); font-size: .8rem; }
+.issue.perdante { opacity: .6; }
+.ma-position { font-size: .82rem; color: var(--bleu); font-weight: 600; }
+
+/* Tableaux ------------------------------------------------------------- */
+.tableau-conteneur { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+th, td { text-align: left; padding: .4rem .35rem; border-bottom: 1px solid #eee; }
+th { color: var(--gris); font-weight: 600; font-size: .78rem; text-transform: uppercase; }
+td.nombre, th.nombre { text-align: right; font-variant-numeric: tabular-nums; }
+tr.moi td { background: var(--bleu-clair); font-weight: 700; }
+.rang { width: 2.2rem; font-weight: 700; }
+.gain-positif { color: var(--vert); font-weight: 700; }
+.gain-nul { color: var(--rouge); }
+
+.direct { font-size: .75rem; color: var(--rouge); display: inline-flex; gap: .35rem; align-items: center; }
+.direct i { width: .5rem; height: .5rem; border-radius: 50%; background: var(--rouge); animation: pulse 1.6s infinite; }
+.direct.hors-ligne { color: var(--gris); }
+.direct.hors-ligne i { background: var(--gris); animation: none; }
+@keyframes pulse { 50% { opacity: .25; } }
+
+.fil { list-style: none; margin: 0; padding: 0; font-size: .85rem; max-height: 22rem; overflow-y: auto; }
+.fil li { padding: .4rem 0; border-bottom: 1px solid #f0f0f0; }
+.fil time { color: var(--gris); font-size: .75rem; display: block; }
+.fil .cloture { color: var(--vert); }
+
+.regles summary { font-weight: 700; cursor: pointer; }
+.regles ul { padding-left: 1.1rem; margin: .6rem 0 0; font-size: .88rem; }
+
+/* Administration --------------------------------------------------------- */
+.ligne-form { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.form-pari { display: grid; gap: .7rem; }
+.form-pari label { display: grid; gap: .2rem; font-size: .88rem; font-weight: 600; }
+.deux-colonnes { display: grid; grid-template-columns: 1fr 1fr; gap: .7rem; }
+@media (max-width: 600px) { .deux-colonnes { grid-template-columns: 1fr; } }
+fieldset { border: 1px solid var(--bord); border-radius: 6px; display: grid; gap: .45rem; }
+legend { font-size: .88rem; font-weight: 600; }
+.ligne-issue { display: grid; grid-template-columns: minmax(0, 1fr) 6rem auto; gap: .4rem; }
+.admin-pari .actions { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .7rem; align-items: center; }
+.admin-pari .proba { width: 5rem; }
+.admin-pari table td { vertical-align: middle; }
+
+.toast {
+  position: fixed; bottom: 1.2rem; left: 50%; transform: translateX(-50%);
+  background: var(--texte); color: #fff; padding: .7rem 1.1rem; border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.25); max-width: calc(100% - 2rem); z-index: 10;
+}
+.toast.erreur { background: var(--rouge); }
+.toast.succes { background: var(--vert); }

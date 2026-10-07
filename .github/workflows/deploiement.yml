@@ -1,0 +1,45 @@
+name: Déploiement OVH
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency: deploiement-ovh
+
+jobs:
+  deployer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Vérifier la syntaxe PHP
+        run: for f in *.php scripts/*.php; do php -l "$f"; done
+
+      - name: Générer config.php depuis les secrets
+        env:
+          PLF_ADMIN_PASSWORD: ${{ secrets.PLF_ADMIN_PASSWORD }}
+          PLF_DB_DSN: ${{ secrets.PLF_DB_DSN }}
+          PLF_DB_USER: ${{ secrets.PLF_DB_USER }}
+          PLF_DB_PASSWORD: ${{ secrets.PLF_DB_PASSWORD }}
+          PLF_CAPITAL: ${{ vars.PLF_CAPITAL }}
+        run: php scripts/generer-config.php
+
+      - name: Envoyer sur l'hébergement OVH (FTP)
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          server-dir: ${{ vars.FTP_DOSSIER || 'www/' }}
+          # Seuls les fichiers modifiés sont envoyés. La base (data/*.db) et les sessions
+          # ne sont jamais écrasées ni supprimées.
+          exclude: |
+            **/.git*
+            **/.git*/**
+            .github/**
+            scripts/**
+            README.md
+            config.exemple.php
+            data/*.db*
+            data/sessions/**
