@@ -301,7 +301,7 @@ function blocCommentaires(p) {
   return `
     <details class="commentaires" data-k="cm-${p.id}">
       <summary>💬 Exposé des motifs${p.commentaires.length ? ` (${p.commentaires.length})` : ""}</summary>
-      ${liste ? `<ul>${liste}</ul>` : `<p class="aide">Aucun commentaire. Justifiez votre pari, ou chambrez les autres !</p>`}
+      ${liste ? `<ul>${liste}</ul>` : `<p class="aide">Aucun commentaire. Justifiez votre pari !</p>`}
       ${etat.moi ? `<form class="form-commentaire" data-pari-commentaire="${p.id}">
         <input name="texte" data-k="ct-${p.id}" maxlength="280" placeholder="Votre commentaire (280 caractères)" required>
         <button type="submit" class="secondaire">Publier</button></form>` : `<p class="aide">Connectez-vous pour commenter.</p>`}
