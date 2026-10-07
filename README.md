@@ -50,6 +50,26 @@ Adresse du site suivie de `#admin`, mot de passe `PLF_ADMIN_PASSWORD`. Quatre so
 - **Réglages** : capital de départ et amorce (priment sur `PLF_CAPITAL` et `PLF_AMORCE`), code
   d'invitation (exigé à l'inscription s'il est défini), équipes, sauvegarde téléchargeable.
 
+## Page d'accueil « marché »
+
+Premier écran du site : chiffres en direct (deniers misés aujourd'hui, marchés ouverts, joueurs, deniers en
+jeu, animés quand ils changent), dernière dépêche, flux des derniers événements, **pari du jour** (mise
+directe et graphique des probabilités), tuiles **Tendances** (probabilité de chaque issue, variation en
+points, mini-courbe sur 30 jours), paris qui ferment bientôt, derniers résultats, prochaine étape.
+
+- **Probabilités** : partout, les issues affichent la probabilité implicite de leur cote (1 / cote, ramenée à
+  100 %) ; la cote reste indiquée en petit (« rapporte ×1,39 »).
+- **Dépêches** (Admin → Paris → « Publier une dépêche », ex. « Réunion à Matignon ») : annoncées dans le
+  bandeau et sur l'accueil, repères sur les courbes ; pendant 7 jours, les variations sont calculées depuis
+  la dernière dépêche si le marché a bougé depuis (sinon sur 24 h), et les mouvements de 10 points ou plus
+  sont annoncés automatiquement (« 📈 49.3 sur le PLF ? : « Oui » vient de prendre 14 pts depuis
+  « Réunion à Matignon » »). Sans dépêche, seuls les mouvements de 15 points sur 24 h le sont.
+- **Pari du jour** : choisi par l'administration pour la journée (bouton « ⭐ En faire le pari du jour »),
+  sinon le pari ouvert le plus animé des dernières 24 heures.
+- **Fiche joueur** (clic sur un pseudo) : rang, variation du total sur 24 h et 7 jours, % de paris gagnés,
+  série en cours, meilleur pari, plus grosse perte, trophées, dernières mises (estimations en cours
+  jamais dévoilées). Elle figure aussi dans « Mon profil ».
+
 ## Joueurs
 
 - **Inscription** (bouton « Créer un compte ») : pseudo, code secret, code d'invitation s'il est défini, et

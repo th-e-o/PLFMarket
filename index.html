@@ -27,7 +27,8 @@
   <main class="grille">
     <section class="principal">
       <nav class="onglets" id="onglets">
-        <button data-onglet="ouverts" class="actif">Paris en cours</button>
+        <button data-onglet="accueil" class="actif">Le marché</button>
+        <button data-onglet="ouverts">Paris en cours</button>
         <button data-onglet="clos">Paris clôturés</button>
         <button data-onglet="mes-mises">Mes mises</button>
         <button data-onglet="profil" id="onglet-profil" hidden>Mon profil</button>
@@ -37,7 +38,8 @@
         <button data-onglet="admin" id="onglet-admin" hidden>Administration</button>
       </nav>
 
-      <div id="vue-ouverts" class="vue"></div>
+      <div id="vue-accueil" class="vue"></div>
+      <div id="vue-ouverts" class="vue" hidden></div>
       <div id="vue-clos" class="vue" hidden></div>
       <div id="vue-mes-mises" class="vue" hidden></div>
       <div id="vue-profil" class="vue" hidden></div>
@@ -144,6 +146,8 @@
           <li>Répartissez-les librement entre les issues des paris ouverts.</li>
           <li>Les cotes dépendent des mises des joueurs : moins les autres croient à une issue, plus elle rapporte.
             Elles bougent à chaque mise, jusqu'à la clôture.</li>
+          <li>Les pourcentages affichés sont les probabilités implicites des cotes (1 / cote, ramenées à 100 %) :
+            « Oui 72 % » veut dire que le marché y croit à 72 %, et qu'un denier misé sur Oui en rapporte environ 1,39.</li>
           <li>Pour que les cotes soient intéressantes dès l'ouverture, la banque mise <b id="amorce">100</b> 🪙 sur
             chaque issue (un Oui/Non démarre à ×2). Cote d'une issue = <i>(cagnotte + mises de la banque) ÷
             (mises sur l'issue + mise de la banque)</i>.</li>
@@ -167,6 +171,7 @@
     </aside>
   </main>
 
+  <dialog id="fiche" class="fiche" aria-label="Fiche joueur"><div id="fiche-contenu"></div></dialog>
   <div id="toast" class="toast" hidden></div>
   <script src="static/app.js?v=__VERSION__"></script>
 </body>

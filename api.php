@@ -42,7 +42,7 @@ const PARIS_V2 = [
      "Déficit public prévu par la loi de finances initiale promulguée.", ['Oui', 'Non']],
 ];
 
-const VERSION_BASE = 7;
+const VERSION_BASE = 8;
 const PROPOSITIONS_PAR_JOUR = 5;
 const DUREES_FLASH = [2, 5, 10, 15, 30, 60]; // minutes
 const COMMENTAIRE_MAX = 280; // caractères
@@ -331,6 +331,12 @@ function migrer(PDO $pdo, int $version): void
         ] as $ordre) {
             $pdo->exec($ordre);
         }
+    }
+    if ($version < 8) { // dépêches de l'administration (« Réunion à Matignon »)
+        $pdo->exec(est_sqlite()
+            ? 'CREATE TABLE IF NOT EXISTS depeches (id INTEGER PRIMARY KEY, texte TEXT NOT NULL, cree_le TEXT NOT NULL)'
+            : 'CREATE TABLE IF NOT EXISTS depeches (id INT AUTO_INCREMENT PRIMARY KEY, texte VARCHAR(200) NOT NULL,
+                   cree_le CHAR(19) NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci');
     }
     $pdo->exec("DELETE FROM reglages WHERE cle IN ('version', 'revision')");
     $pdo->prepare("INSERT INTO reglages (cle, valeur) VALUES ('version', ?)")->execute([(string)VERSION_BASE]);
@@ -868,6 +874,7 @@ function route_etat(): array
         ];
     }
     $typesParPari = array_column($paris, 'type', 'id');
+    $tendances = tendances($paris);
 
     $mesMises = [];
     if ($moi) {
@@ -914,11 +921,120 @@ function route_etat(): array
                                         'description' => $e['description']],
                               q('SELECT * FROM etapes ORDER BY date_etape, id')->fetchAll()),
         'paris' => $paris,
+        'tendances' => $tendances,
+        'pari_du_jour' => pari_du_jour($paris, $tendances),
+        'direct' => direct($paris, $joueurs),
+        'depeches' => array_map(fn($d) => ['id' => (int)$d['id'], 'texte' => $d['texte'], 'date' => $d['cree_le']],
+                                q('SELECT * FROM depeches ORDER BY cree_le DESC, id DESC LIMIT 20')->fetchAll()),
         'mes_mises' => $mesMises,
         'trophees' => array_map(fn($t) => ['icone' => $t[0], 'nom' => $t[1], 'condition' => $t[2]], TROPHEES),
         'mes_trophees' => $moi ? ($trophees[(int)$moi['id']] ?? []) : [],
-        'fil' => fil_actualite(30, $trophees),
+        'fil' => fil_actualite(30, $trophees, $tendances, array_column($paris, 'titre', 'id')),
         'donnees_admin' => empty($_SESSION['admin']) ? null : donnees_admin(),
+    ];
+}
+
+/** Probabilités implicites des cotes {issue: probabilité}, ramenées à 100 % ; null si aucune cote. */
+function probabilites(array $cotes): ?array
+{
+    $inverses = array_map(fn($c) => $c ? 1 / $c : 0.0, $cotes);
+    $somme = array_sum($inverses);
+    return $somme > 0 ? array_map(fn($v) => $v / $somme, $inverses) : null;
+}
+
+/**
+ * Tendances des paris à choix en cours : probabilité implicite de chaque issue, variation en points
+ * depuis 24 h (ou depuis l'ouverture si le pari est plus récent) et depuis la dernière dépêche de
+ * l'administration (7 derniers jours), courbe de chaque issue sur 30 jours, volume misé sur 24 h.
+ */
+function tendances(array $paris): array
+{
+    $il_y_a_24h = date('Y-m-d\TH:i:s', time() - 86400);
+    $il_y_a_30j = date('Y-m-d\TH:i:s', time() - 30 * 86400);
+    $depeche = q('SELECT id, texte, cree_le FROM depeches WHERE cree_le >= ? ORDER BY cree_le DESC, id DESC LIMIT 1',
+                 [date('Y-m-d\TH:i:s', time() - 7 * 86400)])->fetch() ?: null;
+    // Probabilités du dernier relevé de cotes au plus tard à une date (null si le pari est plus récent)
+    $releve = function (int $pariId, string $date): ?array {
+        $cotes = q('SELECT cotes FROM cotes_historique WHERE pari_id = ? AND cree_le <= ? ORDER BY cree_le DESC, id DESC LIMIT 1',
+                   [$pariId, $date])->fetchColumn();
+        return $cotes === false ? null : probabilites(json_decode($cotes, true) ?: []);
+    };
+    $ecart = fn(?array $avant, array $maintenant, int $id) => $avant && isset($avant[$id]) ? (int)round(($maintenant[$id] - $avant[$id]) * 100) : null;
+    $resultat = [];
+    foreach ($paris as $p) {
+        if ($p['type'] !== 'choix' || !in_array($p['statut'], STATUTS_ACTIFS, true)) continue;
+        $maintenant = probabilites(array_column($p['issues'], 'cote', 'id'));
+        if (!$maintenant) continue;
+        $depuis = '24h';
+        $avant = $releve($p['id'], $il_y_a_24h);
+        if (!$avant) { // pari ouvert depuis moins de 24 h : comparaison avec l'ouverture
+            $premier = q('SELECT cotes FROM cotes_historique WHERE pari_id = ? ORDER BY id LIMIT 1', [$p['id']])->fetchColumn();
+            $avant = $premier === false ? null : probabilites(json_decode($premier, true) ?: []);
+            $depuis = 'ouverture';
+        }
+        $avantDepeche = $depeche ? $releve($p['id'], $depeche['cree_le']) : null;
+        arsort($maintenant);
+        $ordre = array_keys($maintenant);
+        // Courbe de chaque issue (dans l'ordre des probabilités actuelles) sur 30 jours, 40 points au plus
+        $points = [];
+        foreach (q('SELECT cree_le, cotes FROM cotes_historique WHERE pari_id = ? AND cree_le >= ? ORDER BY cree_le, id',
+                   [$p['id'], $il_y_a_30j]) as $h) {
+            $probas = probabilites(json_decode($h['cotes'], true) ?: []);
+            if ($probas) $points[] = [$h['cree_le'], array_map(fn($id) => round($probas[$id] ?? 0, 4), $ordre)];
+        }
+        if (count($points) > 40) {
+            $pas = (count($points) - 1) / 39;
+            $points = array_map(fn($k) => $points[(int)round($k * $pas)], range(0, 39));
+        }
+        $points[] = [maintenant(), array_map(fn($id) => round($maintenant[$id], 4), $ordre)];
+        $resultat[] = [
+            'pari_id' => $p['id'],
+            'issues' => array_map(fn($id) => [
+                'id' => $id,
+                'probabilite' => round($maintenant[$id], 4),
+                'variation' => $ecart($avant, $maintenant, $id),
+                'variation_depeche' => $ecart($avantDepeche, $maintenant, $id),
+            ], $ordre),
+            'depuis' => $depuis,
+            'depeche' => $avantDepeche ? ['texte' => $depeche['texte'], 'date' => $depeche['cree_le']] : null,
+            'courbe' => $points,
+            'derniere_mise' => q('SELECT MAX(cree_le) FROM mises WHERE pari_id = ? AND tardive = 0', [$p['id']])->fetchColumn() ?: null,
+            'volume_24h' => (int)q('SELECT COALESCE(SUM(montant), 0) FROM mises WHERE pari_id = ? AND tardive = 0 AND cree_le >= ?',
+                                   [$p['id'], $il_y_a_24h])->fetchColumn(),
+        ];
+    }
+    return $resultat;
+}
+
+/**
+ * Pari du jour : celui choisi aujourd'hui par l'administration s'il accepte encore les mises, sinon le
+ * plus animé des dernières 24 heures (puis la plus grosse cagnotte).
+ */
+function pari_du_jour(array $paris, array $tendances): ?array
+{
+    $ouverts = array_values(array_filter($paris, fn($p) => $p['accepte_mises']));
+    if (!$ouverts) return null;
+    $choix = json_decode(reglage_texte('pari_du_jour') ?: 'null', true);
+    if ($choix && $choix['date'] === date('Y-m-d')) {
+        foreach ($ouverts as $p) if ($p['id'] === (int)$choix['id']) return ['id' => $p['id'], 'choisi' => true];
+    }
+    $volumes = array_column($tendances, 'volume_24h', 'pari_id');
+    usort($ouverts, fn($a, $b) => [$volumes[$b['id']] ?? 0, $b['total_mise']] <=> [$volumes[$a['id']] ?? 0, $a['total_mise']]);
+    return ['id' => $ouverts[0]['id'], 'choisi' => false];
+}
+
+/** Chiffres en direct de la page d'accueil. */
+function direct(array $paris, array $joueurs): array
+{
+    $jour = q("SELECT COALESCE(SUM(montant), 0) AS somme, COUNT(*) AS nb, COUNT(DISTINCT joueur_id) AS actifs
+               FROM mises WHERE tardive = 0 AND cree_le >= ?", [date('Y-m-d') . 'T00:00:00'])->fetch();
+    return [
+        'mises_jour' => (int)$jour['somme'],
+        'nb_mises_jour' => (int)$jour['nb'],
+        'joueurs_actifs_jour' => (int)$jour['actifs'],
+        'marches_ouverts' => count(array_filter($paris, fn($p) => $p['accepte_mises'])),
+        'joueurs' => count($joueurs),
+        'en_jeu' => array_sum(array_map(fn($p) => in_array($p['statut'], STATUTS_ACTIFS, true) ? $p['total_mise'] : 0, $paris)),
     ];
 }
 
@@ -960,6 +1076,104 @@ function route_historique_joueurs(): array
     return ['joueurs' => $joueurs];
 }
 
+/**
+ * Fiche d'un joueur : rang, variation de son total sur 24 h et 7 jours, % de paris gagnés, série en cours,
+ * meilleur pari, plus grosse perte, trophées, dernières mises (sans dévoiler les estimations en cours).
+ */
+function route_fiche(): array
+{
+    session_write_close();
+    $id = entier($_GET['joueur'] ?? null, 'Joueur invalide.');
+    $j = q('SELECT id, pseudo, equipe_id, cree_le FROM joueurs WHERE id = ?', [$id])->fetch();
+    if (!$j) throw new ErreurApi('Joueur introuvable.', 404);
+    $classement = classement();
+    $ligne = current(array_filter($classement, fn($x) => $x['id'] === $id));
+    // Le total ne change qu'aux clôtures et aux ajustements : variation = somme des changements récents
+    $changements = [];
+    foreach (q('SELECT cree_le, montant FROM ajustements WHERE joueur_id = ?', [$id]) as $a) $changements[] = [$a['cree_le'], (int)$a['montant']];
+    $resultats = q("SELECT m.pari_id, p.titre, p.clos_le, p.type, SUM(m.montant) AS mise, SUM(m.gain) AS gain,
+                           MAX(CASE WHEN m.issue_id = p.issue_gagnante_id THEN 1 ELSE 0 END) AS sur_gagnante
+                    FROM mises m JOIN paris p ON p.id = m.pari_id
+                    WHERE m.joueur_id = ? AND p.statut = 'clos' AND m.tardive = 0
+                    GROUP BY m.pari_id, p.titre, p.clos_le, p.type ORDER BY p.clos_le, m.pari_id", [$id])->fetchAll();
+    $gagnes = $perdus = 0;
+    $serie = [0, 0]; // [sens, longueur]
+    $meilleur = $pire = null;
+    foreach ($resultats as $r) {
+        $net = (int)$r['gain'] - (int)$r['mise'];
+        $changements[] = [$r['clos_le'], $net];
+        $gagne = (int)$r['gain'] > 0 && ($r['type'] === 'estimation' || $r['sur_gagnante']);
+        $perdu = (int)$r['gain'] === 0;
+        $gagnes += (int)$gagne;
+        $perdus += (int)$perdu;
+        $sens = $gagne ? 1 : ($perdu ? -1 : 0);
+        $serie = $sens !== 0 && $sens === $serie[0] ? [$sens, $serie[1] + 1] : [$sens, $sens !== 0 ? 1 : 0];
+        $resume = ['pari_id' => (int)$r['pari_id'], 'titre' => $r['titre'], 'net' => $net, 'mise' => (int)$r['mise'],
+                   'date' => $r['clos_le']];
+        if ($net > 0 && (!$meilleur || $net > $meilleur['net'])) $meilleur = $resume;
+        if ($net < 0 && (!$pire || $net < $pire['net'])) $pire = $resume;
+    }
+    $variation = fn(int $secondes) => array_sum(array_map(fn($c) => $c[0] >= date('Y-m-d\TH:i:s', time() - $secondes) ? $c[1] : 0, $changements));
+    $mises = array_map(fn($m) => [
+        'pari_id' => (int)$m['pari_id'], 'titre' => $m['titre'], 'montant' => (int)$m['montant'], 'date' => $m['cree_le'],
+        'issue' => $m['type'] === 'estimation' ? null : $m['libelle'],
+        'resultat' => $m['statut'] === 'annule' || $m['tardive'] ? 'rembourse' : ($m['gain'] === null ? 'en_cours' : ((int)$m['gain'] > 0 ? 'gagne' : 'perdu')),
+        'gain' => $m['gain'] === null ? null : (int)$m['gain'],
+    ], q('SELECT m.pari_id, m.montant, m.cree_le, m.gain, m.tardive, p.titre, p.type, p.statut, i.libelle
+          FROM mises m JOIN paris p ON p.id = m.pari_id JOIN issues i ON i.id = m.issue_id
+          WHERE m.joueur_id = ? ORDER BY m.cree_le DESC, m.id DESC LIMIT 6', [$id])->fetchAll());
+    $trophees = trophees()[$id] ?? [];
+    return [
+        'id' => $id, 'pseudo' => $j['pseudo'], 'inscrit_le' => $j['cree_le'],
+        'equipe' => $j['equipe_id'] ? q('SELECT nom FROM equipes WHERE id = ?', [$j['equipe_id']])->fetchColumn() : null,
+        'rang' => $ligne['rang'], 'nb_joueurs' => count($classement), 'total' => $ligne['total'],
+        'disponible' => $ligne['disponible'], 'en_jeu' => $ligne['en_jeu'],
+        'variation_24h' => $variation(86400), 'variation_7j' => $variation(7 * 86400),
+        'paris_joues' => $gagnes + $perdus, 'paris_gagnes' => $gagnes,
+        'taux_reussite' => $gagnes + $perdus ? round($gagnes / ($gagnes + $perdus), 3) : null,
+        'serie' => ['sens' => $serie[0] > 0 ? 'gagnee' : ($serie[0] < 0 ? 'perdue' : null), 'longueur' => $serie[1]],
+        'meilleur_pari' => $meilleur, 'plus_grosse_perte' => $pire,
+        'trophees' => array_map(fn($code, $date) => ['icone' => TROPHEES[$code][0], 'nom' => TROPHEES[$code][1], 'date' => $date],
+                                array_keys($trophees), $trophees),
+        'dernieres_mises' => $mises,
+    ];
+}
+
+/** Dépêche de l'administration (« Réunion à Matignon ») : fil, bandeau et repère des variations. */
+function route_admin_depeche(): array
+{
+    $texte = trim((string)preg_replace('/\s+/u', ' ', (string)(donnees()['texte'] ?? '')));
+    if (longueur($texte) < 3 || longueur($texte) > 140) throw new ErreurApi('La dépêche doit faire entre 3 et 140 caractères.');
+    return transaction(function () use ($texte) {
+        q('INSERT INTO depeches (texte, cree_le) VALUES (?, ?)', [$texte, maintenant()]);
+        return ['ok' => true];
+    });
+}
+
+function route_admin_depeche_suppression(int $id): array
+{
+    return transaction(function () use ($id) {
+        if (!q('SELECT 1 FROM depeches WHERE id = ?', [$id])->fetch()) throw new ErreurApi('Dépêche introuvable.', 404);
+        q('DELETE FROM depeches WHERE id = ?', [$id]);
+        return ['ok' => true];
+    });
+}
+
+/** Choisit le pari du jour (pour aujourd'hui) ; vide : choix automatique. */
+function route_admin_pari_du_jour(): array
+{
+    $id = donnees()['pari_id'] ?? '';
+    return transaction(function () use ($id) {
+        q("DELETE FROM reglages WHERE cle = 'pari_du_jour'");
+        if ($id !== '' && $id !== null) {
+            $pari = lire_pari(entier($id, 'Pari invalide.'));
+            if (!accepte_les_mises($pari)) throw new ErreurApi("Ce pari n'accepte pas de mises : il ne peut pas être le pari du jour.", 409);
+            q("INSERT INTO reglages (cle, valeur) VALUES ('pari_du_jour', ?)", [json_encode(['id' => (int)$pari['id'], 'date' => date('Y-m-d')])]);
+        }
+        return ['ok' => true];
+    });
+}
+
 /** Évolution des cotes d'un pari à choix. */
 function route_historique_cotes(): array
 {
@@ -977,7 +1191,11 @@ function route_historique_cotes(): array
     ];
 }
 
-function fil_actualite(int $limite = 30, array $trophees = []): array
+/**
+ * @param array $tendances    voir tendances() : sert à annoncer les mouvements marquants
+ * @param array $titres       id de pari => intitulé
+ */
+function fil_actualite(int $limite = 30, array $trophees = [], array $tendances = [], array $titres = []): array
 {
     $evenements = [];
     foreach (q("
@@ -1017,6 +1235,26 @@ function fil_actualite(int $limite = 30, array $trophees = []): array
         ORDER BY c.cree_le DESC, c.id DESC LIMIT $limite") as $c) {
         $evenements[] = ['date' => $c['cree_le'], 'type' => 'commentaire', 'joueur' => $c['pseudo'], 'pari' => $c['titre'],
                          'texte' => $c['texte']];
+    }
+    foreach (q("SELECT texte, cree_le FROM depeches ORDER BY cree_le DESC, id DESC LIMIT $limite") as $d) {
+        $evenements[] = ['date' => $d['cree_le'], 'type' => 'depeche', 'texte' => $d['texte']];
+    }
+    // Mouvements marquants : ±10 pts depuis la dernière dépêche, ou ±15 pts sur 24 h, datés de la dernière mise
+    foreach ($tendances as $t) {
+        if (!$t['derniere_mise']) continue;
+        $issue = $t['issues'][0];
+        foreach ($t['issues'] as $i) {
+            $v = $t['depeche'] ? $i['variation_depeche'] : $i['variation'];
+            if ($v !== null && $v > 0 && $v > ($t['depeche'] ? $issue['variation_depeche'] : $issue['variation'])) $issue = $i;
+        }
+        $variation = $t['depeche'] ? $issue['variation_depeche'] : $issue['variation'];
+        if ($variation === null || abs($variation) < ($t['depeche'] ? 10 : 15)) continue;
+        if ($t['depeche'] && $t['derniere_mise'] < $t['depeche']['date']) continue;
+        $libelle = q('SELECT libelle FROM issues WHERE id = ?', [$issue['id']])->fetchColumn();
+        $evenements[] = ['date' => $t['derniere_mise'], 'type' => 'mouvement', 'pari' => $titres[$t['pari_id']] ?? '',
+                         'pari_id' => $t['pari_id'], 'issue' => $libelle, 'variation' => $variation,
+                         'probabilite' => $issue['probabilite'],
+                         'reference' => $t['depeche'] ? $t['depeche']['texte'] : ($t['depuis'] === '24h' ? null : 'ouverture')];
     }
     $pseudos = array_column(q('SELECT id, pseudo FROM joueurs')->fetchAll(), 'pseudo', 'id');
     foreach ($trophees as $joueurId => $codes) {
@@ -1776,7 +2014,7 @@ function route_admin_sauvegarde(): never
         }
     }
     $export = ['exporte_le' => maintenant(), 'version' => VERSION_BASE];
-    foreach (['reglages', 'joueurs', 'equipes', 'etapes', 'paris', 'issues', 'mises', 'ajustements', 'cotes_historique', 'commentaires'] as $table) {
+    foreach (['reglages', 'joueurs', 'equipes', 'etapes', 'paris', 'issues', 'mises', 'ajustements', 'cotes_historique', 'commentaires', 'depeches'] as $table) {
         $export[$table] = q("SELECT * FROM $table")->fetchAll();
     }
     header('Content-Type: application/json; charset=utf-8');
@@ -1820,6 +2058,7 @@ try {
         }
         if ($route === 'historique-joueurs') repondre(route_historique_joueurs());
         if ($route === 'historique-cotes') repondre(route_historique_cotes());
+        if ($route === 'fiche') repondre(route_fiche());
         if ($route === 'admin/sauvegarde') {
             exiger_admin();
             route_admin_sauvegarde();
@@ -1847,6 +2086,8 @@ try {
     if ($route === 'admin/reglages') repondre(route_admin_reglages());
     if ($route === 'admin/suspension-generale') repondre(route_admin_suspension_generale());
     if ($route === 'admin/flash') repondre(route_admin_flash());
+    if ($route === 'admin/depeches') repondre(route_admin_depeche());
+    if ($route === 'admin/pari-du-jour') repondre(route_admin_pari_du_jour());
     if ($route === 'admin/equipes') repondre(route_admin_creer_equipe());
     if ($route === 'admin/etapes') repondre(route_admin_creer_etape());
     $routesAdmin = [
@@ -1859,8 +2100,9 @@ try {
         'mises' => ['suppression' => 'route_admin_suppression_mise'],
         'equipes' => ['maj' => 'route_admin_equipe_maj', 'suppression' => 'route_admin_equipe_suppression'],
         'etapes' => ['maj' => 'route_admin_etape_maj', 'suppression' => 'route_admin_etape_suppression'],
+        'depeches' => ['suppression' => 'route_admin_depeche_suppression'],
     ];
-    if (preg_match('#^admin/(paris|joueurs|mises|equipes|etapes)/(\d+)/([a-z]+)$#', $route, $m) && isset($routesAdmin[$m[1]][$m[3]])) {
+    if (preg_match('#^admin/(paris|joueurs|mises|equipes|etapes|depeches)/(\d+)/([a-z]+)$#', $route, $m) && isset($routesAdmin[$m[1]][$m[3]])) {
         repondre($routesAdmin[$m[1]][$m[3]]((int)$m[2]));
     }
     throw new ErreurApi('Route inconnue.', 404);

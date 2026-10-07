@@ -18,7 +18,7 @@ const avecUnite = (v, unite) => fmtNombre(v) + (unite ? " " + unite : "");
 const lienPari = (id) => location.origin + location.pathname + "#pari-" + id;
 
 let etat = null;
-let onglet = "ouverts";
+let onglet = "accueil";
 let ongletAdmin = "paris";
 let derniereCle = null; // dernier événement affiché dans le bandeau
 let modeClassement = "joueurs";
@@ -126,6 +126,7 @@ function rendre() {
   $$("#bascule-classement button").forEach((b) => b.classList.toggle("actif", b.dataset.classement === modeClassement));
   const actifs = etat.paris.filter((p) => p.statut === "ouvert" || p.statut === "suspendu");
   const clos = etat.paris.filter((p) => p.statut === "clos" || p.statut === "annule");
+  patch($("#vue-accueil"), vueAccueil());
   patch($("#vue-ouverts"), listeParis(actifs, "Aucun pari en cours pour l'instant."));
   patch($("#vue-clos"), listeParis(clos, "Aucun pari clôturé pour l'instant."));
   patch($("#vue-mes-mises"), vueMesMises());
@@ -146,6 +147,9 @@ function rendre() {
     .map((c) => `<option value="${esc(c)}">`).join("");
   $("#liste-equipes").innerHTML = etat.equipes.map((e) => `<option value="${esc(e.nom)}">`).join("");
   majComptesARebours();
+  majPariDuJour();
+  animerCompteurs();
+  majFicheProfil();
   majGainsPotentiels();
   majCourbes();
   majStats();
@@ -216,6 +220,12 @@ function texteEvenement(e) {
         + (e.nb_tardives ? ` ${pluriel(e.nb_tardives, "mise tardive")} remboursée${e.nb_tardives > 1 ? "s" : ""}.` : "") + "</span>";
     case "annule":
       return `↩️ <b>${esc(e.pari)}</b> annulé, mises remboursées.`;
+    case "depeche":
+      return `<span class="evt-depeche">📰 <b>Dépêche</b> : ${esc(e.texte)}</span>`;
+    case "mouvement":
+      return `<span class="evt-mouvement">${e.variation > 0 ? "📈" : "📉"} <b>${esc(e.pari)}</b> : « ${esc(e.issue)} » vient de
+        ${e.variation > 0 ? "prendre" : "perdre"} <b>${Math.abs(e.variation)} pts</b>
+        ${e.reference === "ouverture" ? "depuis l'ouverture" : e.reference ? `depuis « ${esc(e.reference)} »` : "en 24 h"} (${pourcent(e.probabilite)})</span>`;
     case "flash":
       return `<span class="evt-flash">⚡ <b>Pari flash</b> : « ${esc(e.pari)} » — mises jusqu'à ${esc(fmtHeure(e.date_limite))}</span>`;
     case "commentaire":
@@ -285,7 +295,7 @@ const icones = (codes) => (codes || []).map((c) => `<span class="trophee" title=
 /** Commentaires d'un pari (« exposé des motifs ») et formulaire pour en ajouter un. */
 function blocCommentaires(p) {
   const liste = p.commentaires.map((c) => `
-    <li><b>${esc(c.joueur)}</b> <time>${fmtDate(c.date)}</time>
+    <li><button class="lien-joueur" data-fiche="${c.joueur_id}"><b>${esc(c.joueur)}</b></button> <time>${fmtDate(c.date)}</time>
       ${etat.admin || c.joueur_id === etat.moi?.id ? `<button class="lien" data-action="supprimer-commentaire" data-commentaire="${c.id}" title="Supprimer">✕</button>` : ""}
       <div>${esc(c.texte)}</div></li>`).join("");
   return `
@@ -316,13 +326,16 @@ function cartePari(p) {
         <span class="meta">${meta.join(" · ")}</span>
         <button class="lien lien-pari" data-action="copier-lien" data-pari-lien="${p.id}" title="Copier le lien vers ce pari">🔗 Lien</button>
       </div>
-      <h3>${esc(p.titre)}</h3>
-      ${p.description ? `<p class="desc">${esc(p.description)}</p>` : ""}
-      ${p.auteur ? `<p class="auteur">Proposé par ${esc(p.auteur)}</p>` : ""}
+      <div class="pari-titre">
+        <div><h3>${esc(p.titre)}</h3>
+          ${p.description ? `<p class="desc">${esc(p.description)}</p>` : ""}
+          ${p.auteur ? `<p class="auteur">Proposé par ${esc(p.auteur)}</p>` : ""}</div>
+        ${marche(p) ? miniCourbe(marche(p), p) : ""}
+      </div>
       ${p.type === "estimation" ? blocEstimation(p) : `<div class="issues">${p.issues.map((i) => ligneIssue(p, i)).join("")}</div>`}
       ${p.nb_tardives ? `<p class="aide">⏱ ${pluriel(p.nb_tardives, "mise placée")} après le résultat (connu le ${fmtDate(p.realise_le)}) : remboursée${p.nb_tardives > 1 ? "s" : ""}, hors cagnotte.</p>` : ""}
       ${p.type === "choix" ? `<details class="courbe-cotes" data-k="hc-${p.id}" data-courbe-pari="${p.id}">
-        <summary>📈 Évolution des cotes</summary><div class="graphique"></div></details>` : ""}
+        <summary>📈 Évolution des probabilités</summary><div class="graphique"></div></details>` : ""}
       ${blocCommentaires(p)}
     </article>`;
 }
@@ -362,7 +375,18 @@ function blocEstimation(p) {
   return `<div class="bloc-estimation">${lignes.join("")}</div>`;
 }
 
-function ligneIssue(p, i) {
+/** Tendance d'un pari à choix en cours (voir tendances() côté serveur), ou null. */
+const marche = (p) => etat.tendances.find((t) => t.pari_id === p.id) || null;
+
+/** Probabilité implicite et variations de chaque issue : {id: {probabilite, variation, variation_depeche}}. */
+function probasDe(p) {
+  const t = marche(p);
+  if (t) return Object.fromEntries(t.issues.map((i) => [i.id, i]));
+  const inverses = p.issues.map((i) => (i.cote ? 1 / i.cote : 0)), somme = inverses.reduce((a, b) => a + b, 0);
+  return Object.fromEntries(p.issues.map((i, k) => [i.id, { probabilite: somme ? inverses[k] / somme : null, variation: null }]));
+}
+
+function ligneIssue(p, i, prefixe = "m") {
   const part = p.total_mise ? i.total_mise / p.total_mise : 0;
   const classe = p.statut === "clos" ? (i.id === p.issue_gagnante_id ? "gagnante" : "perdante") : "";
   const miennes = (etat.mes_mises || []).filter((m) => m.issue_id === i.id);
@@ -374,6 +398,7 @@ function ligneIssue(p, i) {
       : `Votre mise : ${nb(maMise)} 🪙 · gain si réalisé, à la cote actuelle : ${nb(miennes.reduce((s, m) => s + m.gain_estime, 0))} 🪙`;
   }
   const peutMiser = p.accepte_mises && etat.moi;
+  const pr = probasDe(p)[i.id];
   return `
     <div class="issue ${classe}">
       <div class="barre" style="width:${(part * 100).toFixed(1)}%"></div>
@@ -382,12 +407,16 @@ function ligneIssue(p, i) {
         <div class="stats">${p.total_mise ? `${pct(part)} % de la cagnotte · ` : ""}${pluriel(i.nb_joueurs, "joueur")} · ${nb(i.total_mise)} 🪙</div>
         ${position ? `<div class="ma-position">${position}</div>` : ""}
       </div>
-      <div class="cote" title="${i.cote == null ? "Personne n'a encore misé sur cette issue" : "Cote actuelle : elle évolue à chaque mise"}">${fmtCote(i.cote)}</div>
+      <div class="proba" title="Probabilité implicite de la cote ${fmtCote(i.cote)} (elle évolue à chaque mise)">
+        <b>${pr?.probabilite == null ? "—" : pourcent(pr.probabilite)}</b>
+        ${p.statut === "ouvert" || p.statut === "suspendu" ? variationCourte(pr, marche(p)) : ""}
+        <small>${p.statut === "clos" ? "cote finale" : "rapporte"} ${fmtCote(i.cote)}</small>
+      </div>
       ${peutMiser ? `
         <form class="miser" data-issue="${i.id}">
-          <input type="number" min="1" step="1" max="${etat.moi.disponible}" placeholder="Mise" data-k="m-${i.id}" data-masse="${p.total_mise}" data-masse-issue="${i.total_mise}" data-nb-issues="${p.issues.length}" data-part="${i.part_banque}">
+          <input type="number" min="1" step="1" max="${etat.moi.disponible}" placeholder="Mise" data-k="${prefixe}-${i.id}" data-masse="${p.total_mise}" data-masse-issue="${i.total_mise}" data-nb-issues="${p.issues.length}" data-part="${i.part_banque}">
           <button type="submit" ${etat.moi.disponible < 1 ? "disabled" : ""}>Parier</button>
-          <span class="gain" data-gain="${i.id}"></span>
+          <span class="gain"></span>
         </form>` : ""}
     </div>`;
 }
@@ -395,7 +424,7 @@ function ligneIssue(p, i) {
 function majGainsPotentiels() {
   $$(".miser:not(.miser-estimation) input").forEach((input) => {
     const montant = parseInt(input.value, 10);
-    const cible = $(`[data-gain="${input.dataset.k.slice(2)}"]`);
+    const cible = $(".gain", input.closest("form"));
     if (cible) cible.textContent = montant > 0
       ? `→ gain estimé : ${nb(gainEstime(montant, +input.dataset.masse, +input.dataset.masseIssue, +input.dataset.nbIssues, +input.dataset.part))} 🪙 (si personne ne mise après vous)`
       : "";
@@ -445,13 +474,271 @@ function vueClassement() {
   const lignes = etat.classement.map((j) => `
     <tr class="${etat.moi && j.id === etat.moi.id ? "moi" : ""}">
       <td class="rang">${medailles[j.rang] || j.rang}</td>
-      <td>${esc(j.pseudo)} ${icones(j.trophees)}${j.equipe_id ? ` <small class="aide">${esc(nomsEquipes[j.equipe_id] ?? "")}</small>` : ""}</td>
+      <td><button class="lien-joueur" data-fiche="${j.id}">${esc(j.pseudo)}</button> ${icones(j.trophees)}${j.equipe_id ? ` <small class="aide">${esc(nomsEquipes[j.equipe_id] ?? "")}</small>` : ""}</td>
       <td class="nombre" title="Disponible : ${nb(j.disponible)} · En jeu : ${nb(j.en_jeu)}">${nb(j.total)}</td>
       <td class="nombre aide">${nb(j.en_jeu)}</td>
     </tr>`).join("");
   return `<div class="tableau-conteneur"><table>
     <thead><tr><th></th><th>Joueur</th><th class="nombre">🪙 Total</th><th class="nombre">En jeu</th></tr></thead>
     <tbody>${lignes}</tbody></table></div>`;
+}
+
+// ---------------------------------------------------------------------------
+// Page d'accueil « marché »
+// ---------------------------------------------------------------------------
+
+const pourcent = (p) => p == null ? "—" : Math.round(p * 100) + " %";
+const signe = (v) => (v > 0 ? "+" : v < 0 ? "−" : "") + nb(Math.abs(v));
+const pts = (v) => v == null ? "" : v > 0 ? `<span class="variation hausse">▲ +${v} pts</span>`
+  : v < 0 ? `<span class="variation baisse">▼ −${-v} pts</span>` : `<span class="variation stable">= 0 pt</span>`;
+
+/** Variation à afficher : depuis la dernière dépêche si le marché a bougé depuis, sinon sur 24 h. */
+const parDepeche = (t) => !!t?.depeche && t.issues.some((i) => i.variation_depeche);
+const variationDe = (t, i) => (parDepeche(t) ? i.variation_depeche : i.variation);
+function variationCourte(pr, t) {
+  const v = pr && variationDe(t, pr);
+  return v ? pts(v) : "";
+}
+const libelleDepuis = (t) => parDepeche(t) ? `depuis « ${esc(t.depeche.texte)} »` : t.depuis === "24h" ? "sur 24 h" : "depuis l'ouverture";
+
+/**
+ * Mini-courbe d'un marché sur 30 jours (0 à 100 %, repère à 50 %) : l'issue en tête pour un Oui/Non,
+ * les 3 premières sinon, avec la valeur de départ et la valeur actuelle.
+ */
+function miniCourbe(t, p) {
+  const n = t.issues.length === 2 ? 1 : Math.min(3, t.issues.length);
+  const points = t.courbe;
+  if (points.length < 2) return "";
+  const W = 150, H = 54, g = 4, d = 4;
+  const temps = points.map(([date]) => +new Date(date));
+  const t0 = temps[0], t1 = temps[temps.length - 1] || t0 + 1;
+  const x = (u) => g + (u - t0) / (t1 - t0 || 1) * (W - g - d), y = (v) => 4 + (1 - v) * (H - 16);
+  const traces = [...Array(n).keys()].map((k) => {
+    const chemin = points.map(([, ps], j) => `${j ? "L" : "M"}${x(temps[j]).toFixed(1)},${y(ps[k]).toFixed(1)}`).join("");
+    const [xf, yf] = [x(temps[temps.length - 1]), y(points[points.length - 1][1][k])];
+    return `<path d="${chemin}" fill="none" stroke="${COULEURS[k]}" stroke-width="2" stroke-linejoin="round"/>
+      <circle cx="${xf}" cy="${yf}" r="2.8" fill="${COULEURS[k]}"/>`;
+  }).join("");
+  const jours = Math.round((Date.now() + decalageHorloge - t0) / 86400e3);
+  const debut = jours >= 29 ? "J-30" : jours >= 1 ? `ouverture, J-${jours}` : "ouverture";
+  const tete = p.issues.find((i) => i.id === t.issues[0].id)?.libelle ?? "";
+  return `<figure class="mini-courbe">
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="« ${esc(tete)} » : ${pourcent(points[0][1][0])} (${debut}), ${pourcent(t.issues[0].probabilite)} aujourd'hui">
+      <title>« ${tete} » : ${pourcent(points[0][1][0])} (${debut}) → ${pourcent(t.issues[0].probabilite)}</title>
+      <line x1="${g}" x2="${W - d}" y1="${y(0.5)}" y2="${y(0.5)}" class="mi-repere"/>
+      ${traces}
+      <text x="${g}" y="${H - 1}" class="mi-axe">${debut} · ${pourcent(points[0][1][0])}</text>
+      <text x="${W - d}" y="${H - 1}" class="mi-axe" text-anchor="end">auj.</text>
+    </svg></figure>`;
+}
+
+function tuileTendance(t) {
+  const p = etat.paris.find((x) => x.id === t.pari_id);
+  const libelle = (id) => p.issues.find((i) => i.id === id)?.libelle ?? "?";
+  const tete = t.issues[0];
+  return `
+    <article class="tuile">
+      <div class="tuile-entete">${p.categorie ? `<span class="badge">${esc(p.categorie)}</span>` : ""}
+        ${p.flash && p.accepte_mises ? `<span class="badge flash">⚡ <span data-fin="${esc(p.date_limite)}"></span></span>` : ""}
+        ${p.statut === "suspendu" ? `<span class="badge suspendu">Suspendu</span>` : ""}</div>
+      <a class="tuile-titre" href="#pari-${p.id}">${esc(p.titre)}</a>
+      <div class="tuile-corps">
+        <div class="tuile-chiffre">
+          <span class="issue-tete">${esc(libelle(tete.id))}</span>
+          <b>${pourcent(tete.probabilite)}</b>
+          ${pts(variationDe(t, tete))}
+          <small class="aide">${libelleDepuis(t)}</small>
+        </div>
+        ${miniCourbe(t, p)}
+      </div>
+      <div class="barre-proba" aria-hidden="true">${t.issues.map((i, n) =>
+        `<span style="width:${(i.probabilite * 100).toFixed(1)}%;background:${COULEURS[n]}"></span>`).join("")}</div>
+      <div class="tuile-issues">${t.issues.slice(0, 4).map((i) =>
+        `<a class="bouton-issue" href="#pari-${p.id}" data-issue-cible="${i.id}">${esc(libelle(i.id))} <b>${pourcent(i.probabilite)}</b></a>`).join("")}
+        ${t.issues.length > 4 ? `<span class="aide">+${t.issues.length - 4}</span>` : ""}</div>
+      <div class="aide tuile-pied">${nb(p.total_mise)} 🪙 en jeu${t.volume_24h ? ` · ${nb(t.volume_24h)} 🪙 sur 24 h` : ""} · ${pluriel(p.nb_joueurs, "joueur")}
+        ${p.commentaires.length ? ` · 💬 ${p.commentaires.length}` : ""}</div>
+    </article>`;
+}
+
+/** Pari du jour : mise directe depuis l'accueil, grand graphique des probabilités. */
+function blocPariDuJour() {
+  if (!etat.pari_du_jour) return "";
+  const p = etat.paris.find((x) => x.id === etat.pari_du_jour.id);
+  if (!p) return "";
+  const t = marche(p);
+  const ordre = t ? t.issues.map((i) => p.issues.find((x) => x.id === i.id)) : p.issues;
+  return `
+    <section class="carte pari-du-jour" id="pari-du-jour">
+      <div class="pdj-entete"><span class="pdj-etiquette">⭐ Pari du jour</span>
+        <span class="aide">${etat.pari_du_jour.choisi ? "choisi par l'organisation" : "le plus animé des dernières 24 heures"}</span>
+        ${p.flash ? `<span class="badge flash">⚡ <span data-fin="${esc(p.date_limite)}"></span></span>` : ""}
+        <button class="lien lien-pari" data-action="copier-lien" data-pari-lien="${p.id}">🔗 Lien</button></div>
+      <h2><a href="#pari-${p.id}">${esc(p.titre)}</a></h2>
+      ${p.description ? `<p class="desc">${esc(p.description)}</p>` : ""}
+      <div class="pdj-corps">
+        <div class="pdj-issues">${p.type === "estimation" ? blocEstimation(p)
+          : `<div class="issues">${ordre.map((i) => ligneIssue(p, i, "pj")).join("")}</div>`}
+          ${!etat.moi ? `<p class="aide">Créez un compte ou connectez-vous pour miser.</p>` : ""}</div>
+        ${t ? `<div class="pdj-graphique"><div class="aide">Probabilités ${libelleDepuis(t)} : ${t.issues.slice(0, 3).map((i) =>
+          `${esc(p.issues.find((x) => x.id === i.id)?.libelle)} ${pts(variationDe(t, i)) || "="}`).join(" · ")}</div>
+          <div class="graphique" data-graphique-pdj="${p.id}"></div></div>` : ""}
+      </div>
+    </section>`;
+}
+
+function vueAccueil() {
+  const d = etat.direct;
+  const tendances = [...etat.tendances].filter((t) => t.pari_id !== etat.pari_du_jour?.id).sort((a, b) => {
+    const pa = etat.paris.find((x) => x.id === a.pari_id), pb = etat.paris.find((x) => x.id === b.pari_id);
+    return (pb.flash && pb.accepte_mises) - (pa.flash && pa.accepte_mises) || b.volume_24h - a.volume_24h || pb.total_mise - pa.total_mise;
+  });
+  const maintenant = new Date(etat.maintenant);
+  const ouverts = etat.paris.filter((p) => p.accepte_mises);
+  const bientot = ouverts.filter((p) => p.date_limite && new Date(p.date_limite) - maintenant < 48 * 3600e3)
+    .sort((a, b) => a.date_limite.localeCompare(b.date_limite)).slice(0, 5);
+  const resultats = etat.paris.filter((p) => p.statut === "clos").slice(0, 4);
+  const etape = etat.etapes.find((e) => e.date >= etat.maintenant.slice(0, 10));
+  const estimations = ouverts.filter((p) => p.type === "estimation");
+  const depeche = etat.depeches.find((x) => maintenant - new Date(x.date) < 24 * 3600e3);
+  const enDirect = etat.fil.filter((e) => ["mise", "mouvement", "flash", "depeche", "commentaire", "clos"].includes(e.type)).slice(0, 4);
+  const moi = etat.moi;
+  return `
+    <section class="accueil-hero">
+      <div class="hero-haut"><h2>Les paris du PLF</h2><span class="hero-direct"><i></i>En direct</span></div>
+      <p class="slogan">Le seul endroit où perdre 500 milliards ne coûte que 200 deniers.</p>
+      <div class="chiffres-cles">
+        <div><b data-compteur="mises_jour" data-valeur="${d.mises_jour}">${nb(d.mises_jour)}</b><span>deniers misés aujourd'hui</span></div>
+        <div><b data-compteur="marches_ouverts" data-valeur="${d.marches_ouverts}">${d.marches_ouverts}</b><span>marché${d.marches_ouverts > 1 ? "s" : ""} ouvert${d.marches_ouverts > 1 ? "s" : ""}</span></div>
+        <div><b data-compteur="joueurs" data-valeur="${d.joueurs}">${d.joueurs}</b><span>joueur${d.joueurs > 1 ? "s" : ""}${d.joueurs_actifs_jour ? `, dont ${d.joueurs_actifs_jour} aujourd'hui` : ""}</span></div>
+        <div><b data-compteur="en_jeu" data-valeur="${d.en_jeu}">${nb(d.en_jeu)}</b><span>deniers en jeu</span></div>
+      </div>
+      ${depeche ? `<p class="hero-depeche">📰 <b>${esc(depeche.texte)}</b> <span>· ${ilYa(depeche.date)}</span></p>` : ""}
+      ${enDirect.length ? `<ul class="hero-flux">${enDirect.map((e) => `<li><time>${ilYa(e.date)}</time> ${texteEvenement(e)}</li>`).join("")}</ul>` : ""}
+      ${moi ? `<p class="accueil-moi">Vous avez <b>${nb(moi.disponible)} 🪙</b> à miser · ${moi.rang}<sup>${moi.rang === 1 ? "er" : "e"}</sup> sur ${etat.classement.length}
+          · <button class="lien" data-fiche="${moi.id}">ma fiche</button></p>`
+        : `<div class="appel"><button data-onglet="inscription">Créer un compte · ${nb(etat.capital)} 🪙 offerts</button>
+           <span>Déjà inscrit ? Connectez-vous en haut à droite.</span></div>`}
+    </section>
+
+    ${blocPariDuJour()}
+
+    <div class="carte-titre titre-section"><h2>📈 Tendances</h2><button class="lien" data-onglet="ouverts">Tous les paris →</button></div>
+    ${tendances.length ? `<div class="grille-tuiles">${tendances.slice(0, 9).map(tuileTendance).join("")}</div>`
+      : `<p class="vide">Aucun autre pari ouvert pour l'instant.</p>`}
+
+    <div class="accueil-colonnes">
+      <div class="carte">
+        <h2>⏳ Clôturent bientôt</h2>
+        ${bientot.length ? `<ul class="liste-simple">${bientot.map((p) =>
+          `<li><a href="#pari-${p.id}">${esc(p.titre)}</a> <span class="aide">${p.flash ? `⚡ <span data-fin="${esc(p.date_limite)}"></span>` : fmtDate(p.date_limite)}</span></li>`).join("")}</ul>`
+          : `<p class="aide">Aucun pari ne ferme dans les 48 heures.</p>`}
+        ${estimations.length ? `<h3>🔢 À estimer</h3><ul class="liste-simple">${estimations.slice(0, 4).map((p) =>
+          `<li><a href="#pari-${p.id}">${esc(p.titre)}</a> <span class="aide">${pluriel(p.nb_joueurs, "estimation")}</span></li>`).join("")}</ul>` : ""}
+        ${etape ? `<h3>📅 Prochaine étape</h3><p><b>${fmtJour(etape.date)}</b> · ${esc(etape.titre)}</p>` : ""}
+      </div>
+      <div class="carte">
+        <h2>🏁 Derniers résultats</h2>
+        ${resultats.length ? `<ul class="liste-simple">${resultats.map((p) => `<li><a href="#pari-${p.id}">${esc(p.titre)}</a>
+          <span class="resultat">${p.type === "estimation" ? esc(avecUnite(p.valeur_reelle, p.unite))
+            : esc(p.issues.find((i) => i.id === p.issue_gagnante_id)?.libelle ?? "")}</span></li>`).join("")}</ul>`
+          : `<p class="aide">Aucun pari clôturé pour l'instant.</p>`}
+      </div>
+    </div>`;
+}
+
+/** Fiche du joueur connecté dans « Mon profil » (rechargée quand l'état change). */
+async function majFicheProfil() {
+  const cible = $("#fiche-profil");
+  if (onglet !== "profil" || !cible || !etat.moi || cible._v === etat.v || majFicheProfil.enCours) return;
+  majFicheProfil.enCours = true;
+  try {
+    const html = vueFiche(await api(`fiche&joueur=${etat.moi.id}`)).replace(/<button class="lien fermer"[^>]*>✕<\/button>/, "");
+    const actuelle = $("#fiche-profil");
+    if (actuelle) { actuelle.innerHTML = html; actuelle._v = etat.v; }
+  } catch (e) {
+    cible.innerHTML = `<p class="vide">${esc(e.message)}</p>`;
+  } finally {
+    majFicheProfil.enCours = false;
+  }
+}
+
+/** Grand graphique du pari du jour (dessiné après le rendu, à partir des tendances). */
+function majPariDuJour() {
+  const cible = $("[data-graphique-pdj]");
+  if (!cible) return;
+  const p = etat.paris.find((x) => x.id === Number(cible.dataset.graphiquePdj)), t = marche(p);
+  if (!t || cible._v === etat.v && cible.childNodes.length) return;
+  cible._v = etat.v;
+  graphique(cible, t.issues.map((i, k) => ({
+    nom: p.issues.find((x) => x.id === i.id)?.libelle ?? "?",
+    points: t.courbe.map(([date, ps]) => [new Date(date), ps[k]]),
+  })), { format: pourcent, domaine: [0, 1], reperes: etat.depeches });
+}
+
+const compteursAffiches = {};
+/** Chiffres en direct : défilement de l'ancienne à la nouvelle valeur, avec un éclair. */
+function animerCompteurs() {
+  $$("[data-compteur]").forEach((el) => {
+    const cle = el.dataset.compteur, cible = Number(el.dataset.valeur), depart = compteursAffiches[cle];
+    compteursAffiches[cle] = cible;
+    if (depart == null || depart === cible || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const debut = performance.now();
+    const pas = (t) => {
+      const avance = Math.min(1, (t - debut) / 900);
+      el.textContent = nb(depart + (cible - depart) * (1 - (1 - avance) ** 3));
+      if (avance < 1) requestAnimationFrame(pas);
+    };
+    requestAnimationFrame(pas);
+    el.parentElement.classList.remove("bouge");
+    void el.offsetWidth;
+    el.parentElement.classList.add("bouge");
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Fiche joueur (fenêtre)
+// ---------------------------------------------------------------------------
+
+function vueFiche(f) {
+  const serie = f.serie.longueur >= 2 ? `${f.serie.sens === "gagnee" ? "🔥" : "🧊"} ${f.serie.longueur} ${f.serie.sens === "gagnee" ? "gagnés" : "perdus"} d'affilée`
+    : f.serie.longueur === 1 ? (f.serie.sens === "gagnee" ? "dernier pari gagné" : "dernier pari perdu") : "—";
+  const pari = (x, classe) => x ? `<a href="#pari-${x.pari_id}" data-action="fermer-fiche">${esc(x.titre)}</a>
+    <b class="${classe}">${signe(x.net)} 🪙</b><span class="aide">mise ${nb(x.mise)}</span>` : `<span class="aide">—</span>`;
+  const resultats = { gagne: "✅", perdu: "❌", en_cours: "⏳", rembourse: "↩️" };
+  return `
+    <div class="fiche-entete">
+      <div><h2>${esc(f.pseudo)} ${f.trophees.map((t) => `<span title="${esc(t.nom)}">${t.icone}</span>`).join("")}</h2>
+        <p class="aide">${f.rang}<sup>${f.rang === 1 ? "er" : "e"}</sup> sur ${f.nb_joueurs}${f.equipe ? ` · ${esc(f.equipe)}` : ""} · inscrit le ${fmtDate(f.inscrit_le)}</p></div>
+      <button class="lien fermer" data-action="fermer-fiche" aria-label="Fermer">✕</button>
+    </div>
+    <div class="fiche-stats">
+      <div><span>Total</span><b>${nb(f.total)} 🪙</b>
+        <small class="${f.variation_24h > 0 ? "hausse" : f.variation_24h < 0 ? "baisse" : ""}">${signe(f.variation_24h)} sur 24 h</small>
+        <small class="${f.variation_7j > 0 ? "hausse" : f.variation_7j < 0 ? "baisse" : ""}">${signe(f.variation_7j)} sur 7 j</small></div>
+      <div><span>Paris gagnés</span><b>${f.taux_reussite == null ? "—" : Math.round(f.taux_reussite * 100) + " %"}</b>
+        <small>${f.paris_gagnes} sur ${f.paris_joues} clôturé${f.paris_joues > 1 ? "s" : ""}</small></div>
+      <div><span>Série en cours</span><b class="petit">${serie}</b></div>
+      <div><span>En jeu</span><b>${nb(f.en_jeu)} 🪙</b><small>${nb(f.disponible)} disponibles</small></div>
+    </div>
+    <div class="fiche-paris">
+      <div><span>🏆 Meilleur pari</span>${pari(f.meilleur_pari, "hausse")}</div>
+      <div><span>💥 Plus grosse perte</span>${pari(f.plus_grosse_perte, "baisse")}</div>
+    </div>
+    ${f.dernieres_mises.length ? `<h3>Dernières mises</h3><ul class="liste-simple">${f.dernieres_mises.map((m) =>
+      `<li><a href="#pari-${m.pari_id}" data-action="fermer-fiche">${resultats[m.resultat]} ${esc(m.titre)}</a>
+        <span class="aide">${nb(m.montant)} 🪙${m.issue ? ` sur « ${esc(m.issue)} »` : ""}${m.gain != null && m.resultat === "gagne" ? ` → ${nb(m.gain)}` : ""}</span></li>`).join("")}</ul>` : ""}`;
+}
+
+async function ouvrirFiche(id) {
+  const fenetre = $("#fiche");
+  $("#fiche-contenu").innerHTML = `<p class="vide">Chargement…</p>`;
+  if (!fenetre.open) fenetre.showModal();
+  try {
+    $("#fiche-contenu").innerHTML = vueFiche(await api(`fiche&joueur=${id}`));
+  } catch (e) {
+    $("#fiche-contenu").innerHTML = `<p class="vide">${esc(e.message)}</p>`;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -493,11 +780,7 @@ function vueProfil() {
       <div><b>${esc(t.nom)}</b><br><span class="aide">${esc(t.condition)}${date ? ` · obtenu le ${fmtDate(date)}` : ""}</span></div></li>`;
   }).join("");
   return `
-    <div class="carte">
-      <h2>${esc(moi.pseudo)} ${icones(moi.trophees)}</h2>
-      <p>${moi.rang}<sup>${moi.rang === 1 ? "er" : "e"}</sup> sur ${etat.classement.length} · ${nb(moi.total)} 🪙
-        (${nb(moi.disponible)} disponibles, ${nb(moi.en_jeu)} en jeu) · ${pluriel(moi.paris_gagnes, "pari gagné")}</p>
-    </div>
+    <div class="carte fiche-profil" id="fiche-profil"><p class="vide">Chargement de votre fiche…</p></div>
     <div class="carte">
       <h2>Mon équipe</h2>
       <p>${equipe ? `<b>${esc(equipe.nom)}</b>${rangEquipe ? ` · ${rangEquipe.rang}<sup>${rangEquipe.rang === 1 ? "re" : "e"}</sup> équipe sur
@@ -644,6 +927,10 @@ function vueAdminParis() {
       <div class="actions">
         <button class="secondaire" data-action="admin-statut" data-statut="${p.statut === "ouvert" ? "suspendu" : "ouvert"}">
           ${p.statut === "ouvert" ? "Suspendre les mises" : "Rouvrir les mises"}</button>
+        ${etat.pari_du_jour?.id === p.id
+          ? `<span class="badge pdj">⭐ Pari du jour${etat.pari_du_jour.choisi ? "" : " (automatique)"}</span>
+             ${etat.pari_du_jour.choisi ? `<button class="lien" data-action="admin-pdj" data-pdj="">Revenir au choix automatique</button>` : ""}`
+          : p.accepte_mises ? `<button class="secondaire" data-action="admin-pdj" data-pdj="${p.id}">⭐ En faire le pari du jour</button>` : ""}
       </div>
       <div class="actions cloture">
         ${estimation ? `<input inputmode="decimal" placeholder="Valeur réelle${p.unite ? ` (${esc(p.unite)})` : ""}" data-k="vr-${p.id}">`
@@ -684,7 +971,20 @@ function vueAdminParis() {
       <p class="aide">Ouvert tout de suite, avec un compte à rebours bien visible et une annonce dans le bandeau.
         Pensez à le clôturer rapidement, avec l'heure du résultat.</p>
     </div>`;
-  return flash + barre + (cartes.join("") || `<p class="vide">Aucun pari en cours.</p>`)
+  const depeches = `
+    <div class="carte lancer-depeche">
+      <h2>📰 Publier une dépêche</h2>
+      <div class="actions">
+        <input data-k="dp-texte" maxlength="140" placeholder="Ex. : Réunion à Matignon, le Gouvernement consulte les groupes" class="large">
+        <button data-action="admin-depeche">Publier</button>
+      </div>
+      <p class="aide">Annoncée dans le bandeau et sur l'accueil ; pendant 7 jours, les variations des marchés sont calculées
+        depuis la dernière dépêche (« ▲ +14 pts depuis « Réunion à Matignon » ») et les mouvements de 10 points ou plus sont
+        annoncés automatiquement. Elle apparaît aussi comme repère sur les courbes.</p>
+      ${etat.depeches.length ? `<ul class="liste-simple">${etat.depeches.slice(0, 5).map((x) => `<li><span>${fmtDate(x.date)} · ${esc(x.texte)}</span>
+        <button class="lien" data-action="admin-depeche-suppression" data-depeche="${x.id}">supprimer</button></li>`).join("")}</ul>` : ""}
+    </div>`;
+  return flash + depeches + barre + (cartes.join("") || `<p class="vide">Aucun pari en cours.</p>`)
     + (cartesClos.length ? `<h2 class="titre-section">Paris clôturés</h2>${cartesClos.join("")}` : "");
 }
 
@@ -865,6 +1165,27 @@ function graduations(min, max, n = 4) {
   return t;
 }
 
+/**
+ * Repères verticaux (dépêches) : étiquettes sur deux rangées pour ne pas se chevaucher, alignées à
+ * droite du trait près du bord droit ; au-delà, seul le trait reste (texte complet au survol).
+ */
+function dessinReperes(reperes, t0, t1, x, W, m, H) {
+  const derniers = [-Infinity, -Infinity]; // fin de la dernière étiquette de chaque rangée
+  return reperes.map((r) => ({ ...r, px: x(+new Date(r.date)) }))
+    .filter((r) => r.px >= m.g && r.px <= W - m.d + 1).sort((a, b) => a.px - b.px)
+    .map((r) => {
+      const texte = "📰 " + (r.texte.length > 20 ? r.texte.slice(0, 20) + "…" : r.texte);
+      const largeur = texte.length * 5.6;
+      const aGauche = r.px + 3 + largeur > W; // près du bord droit : texte à gauche du trait
+      const debut = aGauche ? r.px - 3 - largeur : r.px + 3;
+      const rangee = derniers.findIndex((fin) => debut > fin + 6);
+      if (rangee >= 0) derniers[rangee] = debut + largeur;
+      return `<line class="repere" x1="${r.px}" x2="${r.px}" y1="${m.h}" y2="${H - m.b}"><title>${esc(r.texte)}</title></line>`
+        + (rangee < 0 ? "" : `<text class="repere-texte" x="${aGauche ? r.px - 3 : r.px + 3}" y="${m.h + 10 + rangee * 13}"
+            text-anchor="${aGauche ? "end" : "start"}"><title>${esc(r.texte)}</title>${esc(texte)}</text>`);
+    }).join("");
+}
+
 /** Valeur d'une série en escalier à l'instant t (dernier point ≤ t). */
 const valeurA = (points, t) => { let v = null; for (const [d, y] of points) { if (+d <= t) v = y; else break; } return v; };
 
@@ -872,18 +1193,20 @@ const valeurA = (points, t) => { let v = null; for (const [d, y] of points) { if
  * Dessine des courbes en escalier dans « conteneur ».
  * series : [{ nom, points: [[Date, valeur], …] }] (points triés), une couleur par série dans l'ordre.
  */
-function graphique(conteneur, series, { format = nb } = {}) {
+function graphique(conteneur, series, { format = nb, domaine = null, reperes = [] } = {}) {
   conteneur.textContent = "";
   // Plusieurs points au même instant : seul le dernier compte (sinon, pics verticaux parasites)
   series = series.map((s) => ({ ...s, points: s.points.filter((p, k, t) => k === t.length - 1 || +t[k + 1][0] !== +p[0]) }))
     .filter((s) => s.points.length).slice(0, COULEURS.length);
   if (!series.length) { conteneur.innerHTML = `<p class="vide">Pas encore de données.</p>`; return; }
-  const W = 640, H = 230, m = { h: 10, d: series.length <= 4 ? 110 : 16, b: 24, g: 52 };
+  // Dessin à la largeur réelle du conteneur : textes toujours à leur taille, même sur mobile
+  const W = Math.round(Math.max(300, Math.min(820, conteneur.clientWidth || 640)));
+  const H = W < 480 ? 200 : 230, m = { h: 10, d: series.length <= 4 ? (W < 480 ? 74 : 110) : 16, b: 24, g: 48 };
   const tous = series.flatMap((s) => s.points);
   let t0 = Math.min(...tous.map((p) => +p[0]));
   const t1 = Math.max(...tous.map((p) => +p[0]));
   if (t1 - t0 < 10 * 60e3) t0 = t1 - 10 * 60e3; // historique très court : on élargit vers le passé, jamais vers le futur
-  const ticks = graduations(Math.min(...tous.map((p) => p[1])), Math.max(...tous.map((p) => p[1])));
+  const ticks = domaine ? graduations(domaine[0], domaine[1]) : graduations(Math.min(...tous.map((p) => p[1])), Math.max(...tous.map((p) => p[1])));
   const v0 = ticks[0], v1 = ticks[ticks.length - 1];
   const x = (t) => m.g + (t - t0) / (t1 - t0) * (W - m.g - m.d);
   const y = (v) => m.h + (1 - (v - v0) / (v1 - v0)) * (H - m.h - m.b);
@@ -913,7 +1236,8 @@ function graphique(conteneur, series, { format = nb } = {}) {
     <div class="legende">${series.map((s, n) => `<span><i style="border-color:${COULEURS[n]}"></i>${esc(s.nom)}</span>`).join("")}</div>
     <div class="zone-graphique">
       <svg viewBox="0 0 ${W} ${H}" role="img" tabindex="0" aria-label="Courbes : ${esc(series.map((s) => s.nom).join(", "))}. Flèches gauche et droite pour parcourir.">
-        ${grille}${axeX}${traces}${etiquettes}
+        ${grille}${axeX}${dessinReperes(reperes, t0, t1, x, W, m, H)}
+        ${traces}${etiquettes}
         <line class="reticule" y1="${m.h}" y2="${H - m.b}" hidden/>
         <rect class="cible" x="${m.g}" y="0" width="${W - m.g - m.d}" height="${H}" fill="transparent"/>
       </svg>
@@ -985,10 +1309,16 @@ function majCourbes() {
     cible._v = h.v;
     if (h.erreur) { cible.innerHTML = `<p class="vide">${esc(h.erreur)}</p>`; return; }
     const { issues, points } = h.donnees;
+    // Cotes relevées → probabilités implicites, ramenées à 100 % à chaque relevé
+    const probas = points.map((p) => {
+      const inverses = Object.fromEntries(Object.entries(p.cotes).map(([id, c]) => [id, c ? 1 / c : 0]));
+      const somme = Object.values(inverses).reduce((a, b) => a + b, 0);
+      return { date: new Date(p.date), p: somme ? Object.fromEntries(Object.entries(inverses).map(([id, v]) => [id, v / somme])) : {} };
+    });
     graphique(cible, issues.map((i) => ({
       nom: i.libelle,
-      points: points.filter((p) => p.cotes[i.id] != null).map((p) => [new Date(p.date), p.cotes[i.id]]),
-    })), { format: fmtCote });
+      points: probas.filter((x) => x.p[i.id] != null).map((x) => [x.date, x.p[i.id]]),
+    })), { format: pourcent, domaine: [0, 1], reperes: etat.depeches });
   });
 }
 
@@ -1102,10 +1432,11 @@ document.addEventListener("submit", async (ev) => {
     const input = $("input", form);
     const montant = parseInt(input.value, 10);
     if (!(montant > 0)) return toast("Indiquez une mise d'au moins 1 denier public.", "erreur");
+    const cle = input.dataset.k;
     input.value = ""; // vidé avant le rafraîchissement, qui conserve les saisies en cours
     const ok = await action(api("mises", { body: { issue_id: Number(form.dataset.issue), montant } }),
       `Mise de ${nb(montant)} 🪙 enregistrée !`);
-    if (!ok) { const champ = $(`[data-k="m-${form.dataset.issue}"]`); if (champ) champ.value = montant; }
+    if (!ok) { const champ = $(`[data-k="${cle}"]`); if (champ) champ.value = montant; }
     majGainsPotentiels();
   } else if (form.id === "form-admin") {
     if (await action(api("admin/connexion", { body: { mot_de_passe: $("#admin-mdp").value } }), "Mode administration activé."))
@@ -1125,11 +1456,17 @@ document.addEventListener("submit", async (ev) => {
 
 document.addEventListener("click", async (ev) => {
   const ancre = ev.target.closest('a[href^="#pari-"]');
-  if (ancre) { // même lien cliqué deux fois : hashchange ne se déclencherait pas
+  if (ancre) {
+    if ($("#fiche").open) $("#fiche").close(); // même lien cliqué deux fois : hashchange ne se déclencherait pas
     ev.preventDefault();
     history.replaceState(null, "", ancre.getAttribute("href"));
-    return suivreAncre();
+    suivreAncre();
+    if (ancre.dataset.issueCible) $(`[data-k="m-${ancre.dataset.issueCible}"]`)?.focus({ preventScroll: true });
+    return;
   }
+  const lienFiche = ev.target.closest("[data-fiche]");
+  if (lienFiche) return ouvrirFiche(lienFiche.dataset.fiche);
+  if (ev.target.id === "fiche") return $("#fiche").close(); // clic sur le fond
   const bouton = ev.target.closest("[data-onglet], [data-onglet-admin], [data-classement], [data-action]");
   if (!bouton) return;
   if (bouton.dataset.onglet) {
@@ -1156,6 +1493,9 @@ document.addEventListener("click", async (ev) => {
       break;
     case "copier-lien":
       await copierLien(bouton.dataset.pariLien);
+      break;
+    case "fermer-fiche":
+      $("#fiche").close();
       break;
     case "quitter-equipe":
       await changerEquipe("");
@@ -1312,6 +1652,19 @@ document.addEventListener("click", async (ev) => {
       await action(api(`admin/etapes/${id}/suppression`, { method: "POST" }), "Étape supprimée.");
       break;
     }
+    case "admin-depeche": {
+      const texte = champ("dp-texte");
+      if (await action(api("admin/depeches", { body: { texte: texte.value } }), "Dépêche publiée.")) texte.value = "";
+      break;
+    }
+    case "admin-depeche-suppression":
+      if (!confirm("Supprimer cette dépêche ?")) return;
+      await action(api(`admin/depeches/${bouton.dataset.depeche}/suppression`, { method: "POST" }), "Dépêche supprimée.");
+      break;
+    case "admin-pdj":
+      await action(api("admin/pari-du-jour", { body: { pari_id: bouton.dataset.pdj } }),
+        bouton.dataset.pdj ? "C'est le pari du jour, en tête de l'accueil." : "Pari du jour : choix automatique.");
+      break;
     case "admin-tout-suspendre":
       if (!confirm("Suspendre immédiatement les mises de tous les paris ouverts ?")) return;
       await action(api("admin/suspension-generale", { body: { action: "suspendre" } }), "Tous les paris ouverts sont suspendus.");
