@@ -6,6 +6,14 @@ Options -Indexes
     Require all denied
 </FilesMatch>
 
+# La page est toujours revérifiée ; CSS et JS sont versionnés (?v=commit) lors du déploiement,
+# ce qui contourne le cache longue durée appliqué par OVH en mode production.
+<IfModule mod_headers.c>
+    <FilesMatch "\.html$">
+        Header set Cache-Control "no-cache"
+    </FilesMatch>
+</IfModule>
+
 # Forcer le HTTPS
 RewriteEngine On
 RewriteCond %{SERVER_PORT} ^80$

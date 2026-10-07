@@ -26,6 +26,9 @@ jobs:
           PLF_AMORCE: ${{ vars.PLF_AMORCE }}
         run: php scripts/generer-config.php
 
+      - name: Versionner CSS et JS (contourne le cache des navigateurs)
+        run: sed -i "s/__VERSION__/${GITHUB_SHA::8}/g" index.html
+
       - name: Envoyer sur l'hébergement OVH (FTP)
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
         with:
