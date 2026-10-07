@@ -192,6 +192,16 @@ legend { font-size: .88rem; font-weight: 600; }
 .ligne-issue { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .4rem; }
 .admin-pari .actions { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .7rem; align-items: center; }
 .admin-pari table td { vertical-align: middle; }
+.admin-pari details, .admin-joueur .actions { margin-top: .7rem; }
+.admin-pari details > summary { cursor: pointer; color: var(--bleu); font-size: .9rem; }
+.edition .form-pari { margin-top: .6rem; padding: .8rem; background: var(--fond); border-radius: 6px; }
+.edition .ligne-issue { align-items: center; }
+.sous-onglets { margin-top: 1rem; }
+.admin-joueur { margin-bottom: .6rem; }
+.admin-joueur summary { cursor: pointer; display: flex; flex-wrap: wrap; gap: .5rem; align-items: baseline; }
+.admin-joueur .actions { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+.admin-joueur ul { margin: .6rem 0 0; }
+input.petit { width: 7rem; }
 
 .toast {
   position: fixed; bottom: 1.2rem; left: 50%; transform: translateX(-50%);

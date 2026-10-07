@@ -33,6 +33,17 @@ Côté OVH, une seule chose : activer le certificat SSL (onglet *Informations g�
 sous-domaine dédié (`paris.mondomaine.fr`) : onglet *Multisite* → *Ajouter un domaine*, dossier
 racine identique à `FTP_DOSSIER`.
 
+## Administration
+
+Adresse du site suivie de `#admin`, mot de passe `PLF_ADMIN_PASSWORD`. Trois sous-onglets :
+
+- **Paris** : modifier un pari (textes, date limite, libellés ; ajouter ou retirer des issues sans
+  mise tant qu'il est en cours), miser pour un joueur, supprimer une mise (remboursée), suspendre,
+  clôturer, annuler, et revenir sur une clôture ou une annulation (les gains sont repris).
+- **Joueurs** : renommer, donner un nouveau code, créditer ou débiter des clochettes (visible dans le
+  fil), supprimer un joueur et ses mises.
+- **Réglages** : capital de départ et amorce, qui priment alors sur `PLF_CAPITAL` et `PLF_AMORCE`.
+
 ## Mises à jour de la base
 
 La structure de la base et les nouveaux paris livrés avec le code sont appliqués automatiquement au

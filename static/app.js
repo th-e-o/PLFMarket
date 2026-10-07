@@ -16,6 +16,7 @@ const pluriel = (n, mot) => `${n} ${mot}${n > 1 ? "s" : ""}`;
 
 let etat = null;
 let onglet = "ouverts";
+let ongletAdmin = "paris";
 let derniereCle = null; // dernier événement affiché dans le bandeau
 
 // ---------------------------------------------------------------------------
@@ -73,13 +74,20 @@ async function rafraichir() {
 
 function patch(el, html) {
   if (el._html === html) return;
-  const valeurs = {};
-  $$("[data-k]", el).forEach((i) => (valeurs[i.dataset.k] = i.value));
+  const valeurs = {}, coches = {}, ouverts = {};
+  $$("[data-k]", el).forEach((i) => {
+    if (i.tagName === "DETAILS") ouverts[i.dataset.k] = i.open;
+    else if (i.type === "checkbox") coches[i.dataset.k] = i.checked;
+    else valeurs[i.dataset.k] = i.value;
+  });
   const focus = el.contains(document.activeElement) ? document.activeElement.dataset.k : null;
   el.innerHTML = html;
   el._html = html;
   $$("[data-k]", el).forEach((i) => {
-    if (i.dataset.k in valeurs && valeurs[i.dataset.k] !== "") i.value = valeurs[i.dataset.k];
+    const k = i.dataset.k;
+    if (k in ouverts) i.open = ouverts[k];
+    else if (k in coches) i.checked = coches[k];
+    else if (k in valeurs && valeurs[k] !== "") i.value = valeurs[k];
   });
   if (focus) $(`[data-k="${focus}"]`, el)?.focus();
 }
@@ -102,7 +110,13 @@ function rendre() {
   patch($("#vue-mes-mises"), vueMesMises());
   patch($("#classement"), vueClassement());
   patch($("#fil"), vueFil());
-  if (etat.admin) patch($("#admin-paris"), vueAdminParis());
+  if (etat.admin && etat.donnees_admin) {
+    $$("#onglets-admin button").forEach((b) => b.classList.toggle("actif", b.dataset.ongletAdmin === ongletAdmin));
+    $$(".vue-admin").forEach((v) => (v.hidden = v.id !== "admin-" + ongletAdmin));
+    patch($("#admin-paris"), vueAdminParis());
+    patch($("#admin-joueurs"), vueAdminJoueurs());
+    patch($("#admin-reglages"), vueAdminReglages());
+  }
   $("#categories").innerHTML = [...new Set(etat.paris.map((p) => p.categorie).filter(Boolean))]
     .map((c) => `<option value="${esc(c)}">`).join("");
   majGainsPotentiels();
@@ -140,7 +154,12 @@ function rendreOnglets() {
 function texteEvenement(e) {
   switch (e.type) {
     case "mise":
-      return `<b>${esc(e.joueur)}</b> mise ${nb(e.montant)} 🔔 sur « ${esc(e.issue)} » — ${esc(e.pari)}`;
+      return `<b>${esc(e.joueur)}</b> mise ${nb(e.montant)} 🔔 sur « ${esc(e.issue)} » — ${esc(e.pari)}`
+        + (e.par_admin ? ` <small>(saisie par l'admin)</small>` : "");
+    case "ajustement":
+      return (e.montant > 0 ? `🎁 <b>${esc(e.joueur)}</b> reçoit ${nb(e.montant)} 🔔 de l'administration`
+                            : `➖ L'administration retire ${nb(-e.montant)} 🔔 à <b>${esc(e.joueur)}</b>`)
+        + (e.motif ? ` (${esc(e.motif)})` : "");
     case "clos":
       return `<span class="cloture">🏁 <b>${esc(e.pari)}</b> : « ${esc(e.issue)} ». ` + (e.nb_gagnants
         ? `${pluriel(e.nb_gagnants, "mise gagnante")} rapporte${e.nb_gagnants > 1 ? "nt" : ""} ${nb(e.distribue)} 🔔.`
@@ -300,9 +319,56 @@ function vueClassement() {
 // Administration
 // ---------------------------------------------------------------------------
 
+const libelleIssue = (p, id) => p.issues.find((i) => i.id === id)?.libelle ?? "?";
+const pseudoDe = (id) => etat.classement.find((j) => j.id === id)?.pseudo ?? "?";
+
+/** Formulaire de modification d'un pari (issues ajoutables / retirables seulement s'il est en cours). */
+function editionPari(p, actif) {
+  const k = `ed-${p.id}`;
+  return `
+    <details class="edition" data-k="${k}"><summary>Modifier le pari</summary>
+      <div class="form-pari">
+        <label>Intitulé<input data-k="${k}-titre" maxlength="200" value="${esc(p.titre)}"></label>
+        <div class="deux-colonnes">
+          <label>Catégorie<input data-k="${k}-cat" maxlength="40" list="categories" value="${esc(p.categorie)}"></label>
+          <label>Fin des mises<input type="datetime-local" data-k="${k}-date" value="${p.date_limite || ""}"></label>
+        </div>
+        <label>Précisions / règle d'arbitrage<textarea data-k="${k}-desc" rows="2" maxlength="500">${esc(p.description)}</textarea></label>
+        <fieldset><legend>Issues</legend>
+          ${p.issues.map((i) => `<div class="ligne-issue">
+            <input data-k="${k}-i-${i.id}" data-issue="${i.id}" maxlength="80" value="${esc(i.libelle)}">
+            ${!actif ? "" : i.total_mise ? `<span class="aide">${nb(i.total_mise)} 🔔 misées</span>`
+              : `<label class="aide"><input type="checkbox" data-k="${k}-r-${i.id}" data-retirer="${i.id}"> retirer</label>`}
+          </div>`).join("")}
+          ${actif ? `<input data-k="${k}-nouvelle" maxlength="80" placeholder="Ajouter une issue (facultatif)">` : ""}
+        </fieldset>
+        <div><button data-action="admin-maj">Enregistrer les modifications</button></div>
+      </div>
+    </details>`;
+}
+
+function listeMisesAdmin(p) {
+  const mises = etat.donnees_admin.mises.filter((m) => m.pari_id === p.id);
+  if (!mises.length) return "";
+  const actif = p.statut === "ouvert" || p.statut === "suspendu";
+  return `
+    <details data-k="lm-${p.id}"><summary>${pluriel(mises.length, "mise")}</summary>
+      <div class="tableau-conteneur"><table>
+        <thead><tr><th>Date</th><th>Joueur</th><th>Issue</th><th class="nombre">Mise</th><th class="nombre">${actif ? "" : "Gain"}</th></tr></thead>
+        <tbody>${mises.map((m) => `<tr>
+          <td>${fmtDate(m.cree_le)}</td><td>${esc(pseudoDe(m.joueur_id))}${m.par_admin ? ` <small class="aide">(admin)</small>` : ""}</td>
+          <td>${esc(libelleIssue(p, m.issue_id))}</td><td class="nombre">${nb(m.montant)}</td>
+          <td class="nombre">${actif ? `<button class="lien" data-action="admin-suppression-mise" data-mise="${m.id}">supprimer</button>` : nb(m.gain ?? 0)}</td>
+        </tr>`).join("")}</tbody>
+      </table></div>
+    </details>`;
+}
+
 function vueAdminParis() {
   const actifs = etat.paris.filter((p) => p.statut === "ouvert" || p.statut === "suspendu");
   const clos = etat.paris.filter((p) => p.statut === "clos" || p.statut === "annule");
+  const optionsJoueurs = [...etat.classement].sort((a, b) => a.pseudo.localeCompare(b.pseudo))
+    .map((j) => `<option value="${j.id}">${esc(j.pseudo)} (${nb(j.disponible)} 🔔)</option>`).join("");
   const cartes = actifs.map((p) => `
     <article class="carte admin-pari" data-pari="${p.id}">
       <div class="pari-entete">${p.categorie ? `<span class="badge">${esc(p.categorie)}</span>` : ""}${badgeStatut(p)}
@@ -318,14 +384,17 @@ function vueAdminParis() {
           <td class="nombre">${i.nb_joueurs}</td>
         </tr>`).join("")}</tbody>
       </table></div>
-      <p class="aide">À la clôture, les mises sur l'issue réalisée sont payées à la cote finale${etat.amorce ? ` (amorce de la banque : ${nb(etat.amorce)} 🔔 par issue)` : ""}.</p>
+      ${listeMisesAdmin(p)}
+      ${editionPari(p, true)}
       <div class="actions">
-        <label class="aide">Fin des mises <input type="datetime-local" data-k="d-${p.id}" value="${p.date_limite || ""}"></label>
-        <button class="secondaire" data-action="admin-maj">Enregistrer</button>
-        <button class="secondaire" data-action="admin-statut" data-statut="${p.statut === "ouvert" ? "suspendu" : "ouvert"}">
-          ${p.statut === "ouvert" ? "Suspendre les mises" : "Rouvrir les mises"}</button>
+        <select data-k="mj-${p.id}"><option value="">— Miser pour… —</option>${optionsJoueurs}</select>
+        <select data-k="mi-${p.id}">${p.issues.map((i) => `<option value="${i.id}">${esc(i.libelle)}</option>`).join("")}</select>
+        <input type="number" min="1" step="1" placeholder="Mise" data-k="mm-${p.id}" class="petit">
+        <button class="secondaire" data-action="admin-miser">Miser</button>
       </div>
       <div class="actions">
+        <button class="secondaire" data-action="admin-statut" data-statut="${p.statut === "ouvert" ? "suspendu" : "ouvert"}">
+          ${p.statut === "ouvert" ? "Suspendre les mises" : "Rouvrir les mises"}</button>
         <select data-k="w-${p.id}"><option value="">— Issue réalisée —</option>
           ${p.issues.map((i) => `<option value="${i.id}">${esc(i.libelle)}</option>`).join("")}</select>
         <button data-action="admin-cloture">Clôturer et payer</button>
@@ -333,9 +402,67 @@ function vueAdminParis() {
         ${p.total_mise === 0 ? `<button class="lien" data-action="admin-suppression">Supprimer</button>` : ""}
       </div>
     </article>`);
-  const resumeClos = clos.length ? `<div class="carte"><h3>Paris clôturés</h3><ul>${clos.map((p) =>
-    `<li>${esc(p.titre)} — ${p.statut === "annule" ? "annulé" : "« " + esc(p.issues.find((i) => i.id === p.issue_gagnante_id)?.libelle) + " »"}</li>`).join("")}</ul></div>` : "";
-  return (cartes.join("") || `<p class="vide">Aucun pari en cours.</p>`) + resumeClos;
+  const cartesClos = clos.map((p) => `
+    <article class="carte admin-pari" data-pari="${p.id}">
+      <div class="pari-entete">${p.categorie ? `<span class="badge">${esc(p.categorie)}</span>` : ""}${badgeStatut(p)}
+        <span class="meta">${p.clos_le ? `le ${fmtDate(p.clos_le)} · ` : ""}cagnotte ${nb(p.total_mise)} 🔔</span></div>
+      <h3>${esc(p.titre)}</h3>
+      <p>${p.statut === "annule" ? "Annulé, mises remboursées." : `Issue réalisée : « ${esc(libelleIssue(p, p.issue_gagnante_id))} »`}</p>
+      ${listeMisesAdmin(p)}
+      ${editionPari(p, false)}
+      <div class="actions">
+        <button class="secondaire" data-action="admin-reouverture">Revenir sur ${p.statut === "annule" ? "l'annulation" : "la clôture"}</button>
+      </div>
+    </article>`);
+  return (cartes.join("") || `<p class="vide">Aucun pari en cours.</p>`)
+    + (cartesClos.length ? `<h2 class="titre-section">Paris clôturés</h2>${cartesClos.join("")}` : "");
+}
+
+function vueAdminJoueurs() {
+  if (!etat.classement.length) return `<p class="vide">Aucun joueur inscrit.</p>`;
+  const joueurs = [...etat.classement].sort((a, b) => a.pseudo.localeCompare(b.pseudo));
+  return joueurs.map((j) => {
+    const ajustements = etat.donnees_admin.ajustements.filter((a) => a.joueur_id === j.id);
+    const nbMises = etat.donnees_admin.mises.filter((m) => m.joueur_id === j.id).length;
+    return `
+    <details class="carte admin-joueur" data-joueur="${j.id}" data-k="j-${j.id}">
+      <summary><b>${esc(j.pseudo)}</b>
+        <span class="meta">${j.rang}<sup>e</sup> · disponible ${nb(j.disponible)} · en jeu ${nb(j.en_jeu)} · total ${nb(j.total)} 🔔 · ${pluriel(nbMises, "mise")}</span></summary>
+      <div class="actions">
+        <label class="aide">Pseudo <input data-k="jp-${j.id}" maxlength="30" value="${esc(j.pseudo)}"></label>
+        <label class="aide">Nouveau code <input data-k="jc-${j.id}" maxlength="64" placeholder="inchangé" autocomplete="off"></label>
+        <button class="secondaire" data-action="admin-joueur-maj">Enregistrer</button>
+      </div>
+      <div class="actions">
+        <label class="aide">Clochettes <input type="number" step="1" data-k="ja-${j.id}" placeholder="+100 ou -50" class="petit"></label>
+        <label class="aide">Motif <input data-k="jm-${j.id}" maxlength="200" placeholder="facultatif, visible de tous"></label>
+        <button class="secondaire" data-action="admin-ajustement">Créditer / débiter</button>
+      </div>
+      ${ajustements.length ? `<ul class="aide">${ajustements.map((a) =>
+        `<li>${fmtDate(a.cree_le)} : ${a.montant > 0 ? "+" : ""}${nb(a.montant)} 🔔${a.motif ? ` (${esc(a.motif)})` : ""}</li>`).join("")}</ul>` : ""}
+      <div class="actions"><button class="danger" data-action="admin-joueur-suppression">Supprimer le joueur</button></div>
+    </details>`;
+  }).join("");
+}
+
+function vueAdminReglages() {
+  const d = etat.donnees_admin;
+  return `
+    <div class="carte">
+      <h2>Réglages du jeu</h2>
+      <div class="actions">
+        <label class="aide">Capital de départ <input type="number" min="0" step="1" data-k="r-capital" value="${etat.capital}" class="petit"></label>
+        <label class="aide">Amorce de la banque, par issue <input type="number" min="0" step="1" data-k="r-amorce" value="${etat.amorce}" class="petit"></label>
+        <button data-action="admin-reglages">Enregistrer</button>
+        <button class="lien" data-action="admin-reglages-defaut">Revenir aux valeurs par défaut (${nb(d.capital_defaut)} / ${nb(d.amorce_defaut)})</button>
+      </div>
+      <ul class="aide">
+        <li>Le capital s'applique rétroactivement : changer 1 000 en 1 500 ajoute 500 🔔 à chaque joueur.</li>
+        <li>L'amorce change immédiatement les cotes de tous les paris en cours (pas ceux déjà clôturés).
+          Plus elle est haute, plus les cotes sont stables ; 0 = pari mutuel pur.</li>
+        <li>Ces valeurs priment sur les variables GitHub <code>PLF_CAPITAL</code> et <code>PLF_AMORCE</code>.</li>
+      </ul>
+    </div>`;
 }
 
 function ajouterLigneIssue(libelle = "") {
@@ -389,14 +516,21 @@ document.addEventListener("submit", async (ev) => {
 });
 
 document.addEventListener("click", async (ev) => {
-  const bouton = ev.target.closest("[data-onglet], [data-action]");
+  const bouton = ev.target.closest("[data-onglet], [data-onglet-admin], [data-action]");
   if (!bouton) return;
   if (bouton.dataset.onglet) {
     onglet = bouton.dataset.onglet;
     return rendre();
   }
+  if (bouton.dataset.ongletAdmin) {
+    ongletAdmin = bouton.dataset.ongletAdmin;
+    return rendre();
+  }
   const carte = bouton.closest("[data-pari]");
   const pariId = carte?.dataset.pari;
+  const fiche = bouton.closest("[data-joueur]");
+  const joueurId = fiche?.dataset.joueur;
+  const champ = (k, el = document) => $(`[data-k="${k}"]`, el);
   switch (bouton.dataset.action) {
     case "deconnexion":
       await action(api("deconnexion", { method: "POST" }));
@@ -404,8 +538,67 @@ document.addEventListener("click", async (ev) => {
     case "retirer-issue":
       bouton.closest(".ligne-issue").remove();
       break;
-    case "admin-maj":
-      await action(api(`admin/paris/${pariId}/maj`, { body: { date_limite: $(`[data-k="d-${pariId}"]`, carte).value } }), "Pari mis à jour.");
+    case "admin-maj": {
+      const k = `ed-${pariId}`;
+      const body = {
+        titre: champ(`${k}-titre`, carte).value, categorie: champ(`${k}-cat`, carte).value,
+        description: champ(`${k}-desc`, carte).value, date_limite: champ(`${k}-date`, carte).value,
+        issues: Object.fromEntries($$(`.edition [data-issue]`, carte).map((i) => [i.dataset.issue, i.value])),
+        retirer: $$("[data-retirer]", carte).filter((c) => c.checked).map((c) => Number(c.dataset.retirer)),
+        nouvelles: champ(`${k}-nouvelle`, carte) ? [champ(`${k}-nouvelle`, carte).value] : [],
+      };
+      if (await action(api(`admin/paris/${pariId}/maj`, { body }), "Pari modifié.")) {
+        const nouvelle = champ(`${k}-nouvelle`, carte);
+        if (nouvelle) nouvelle.value = "";
+      }
+      break;
+    }
+    case "admin-miser": {
+      const joueur = champ(`mj-${pariId}`, carte), issue = champ(`mi-${pariId}`, carte), montant = champ(`mm-${pariId}`, carte);
+      if (!joueur.value) return toast("Choisissez le joueur.", "erreur");
+      const body = { joueur_id: Number(joueur.value), issue_id: Number(issue.value), montant: parseInt(montant.value, 10) };
+      if (await action(api("admin/mises", { body }), `Mise de ${nb(body.montant)} 🔔 enregistrée pour ${pseudoDe(body.joueur_id)}.`)) montant.value = "";
+      break;
+    }
+    case "admin-suppression-mise":
+      if (!confirm("Supprimer cette mise ? Le joueur la récupère.")) return;
+      await action(api(`admin/mises/${bouton.dataset.mise}/suppression`, { method: "POST" }), "Mise supprimée et remboursée.");
+      break;
+    case "admin-reouverture": {
+      if (!confirm("Revenir sur ce résultat ? Les gains versés sont repris et le pari repasse en « suspendu ». "
+        + "Un joueur qui a déjà remisé ses gains peut se retrouver avec un solde négatif.")) return;
+      try {
+        const r = await api(`admin/paris/${pariId}/reouverture`, { method: "POST" });
+        toast(r.soldes_negatifs.length ? `Pari rouvert. Solde négatif pour : ${r.soldes_negatifs.join(", ")}.` : "Pari rouvert (suspendu).", "succes");
+        await rafraichir();
+      } catch (e) {
+        toast(e.message, "erreur");
+      }
+      break;
+    }
+    case "admin-joueur-maj": {
+      const code = champ(`jc-${joueurId}`, fiche);
+      if (await action(api(`admin/joueurs/${joueurId}/maj`, { body: { pseudo: champ(`jp-${joueurId}`, fiche).value, pin: code.value } }), "Joueur mis à jour.")) code.value = "";
+      break;
+    }
+    case "admin-ajustement": {
+      const montant = champ(`ja-${joueurId}`, fiche), motif = champ(`jm-${joueurId}`, fiche);
+      const body = { montant: parseInt(montant.value, 10), motif: motif.value };
+      if (await action(api(`admin/joueurs/${joueurId}/ajustement`, { body }), body.montant > 0 ? "Clochettes créditées." : "Clochettes débitées.")) {
+        montant.value = motif.value = "";
+      }
+      break;
+    }
+    case "admin-joueur-suppression":
+      if (!confirm(`Supprimer définitivement ${pseudoDe(Number(joueurId))} et toutes ses mises ?`)) return;
+      await action(api(`admin/joueurs/${joueurId}/suppression`, { method: "POST" }), "Joueur supprimé.");
+      break;
+    case "admin-reglages":
+      await action(api("admin/reglages", { body: { capital: champ("r-capital").value, amorce: champ("r-amorce").value } }), "Réglages enregistrés.");
+      break;
+    case "admin-reglages-defaut":
+      champ("r-capital").value = champ("r-amorce").value = "";
+      await action(api("admin/reglages", { body: { capital: "", amorce: "" } }), "Valeurs par défaut rétablies.");
       break;
     case "admin-statut":
       await action(api(`admin/paris/${pariId}/statut`, { body: { statut: bouton.dataset.statut } }));

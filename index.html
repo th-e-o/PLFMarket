@@ -78,8 +78,14 @@
             <p class="aide">Pour créer un pari, utilisez l'onglet « Proposer un pari ».</p>
             <button class="lien" id="admin-deconnexion">Quitter l'administration</button>
           </div>
-          <h2 class="titre-section">Gestion des paris</h2>
-          <div id="admin-paris"></div>
+          <nav class="onglets sous-onglets" id="onglets-admin">
+            <button data-onglet-admin="paris" class="actif">Paris</button>
+            <button data-onglet-admin="joueurs">Joueurs</button>
+            <button data-onglet-admin="reglages">Réglages</button>
+          </nav>
+          <div id="admin-paris" class="vue-admin"></div>
+          <div id="admin-joueurs" class="vue-admin" hidden></div>
+          <div id="admin-reglages" class="vue-admin" hidden></div>
         </div>
       </div>
     </section>
