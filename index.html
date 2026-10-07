@@ -18,18 +18,51 @@
     <div id="compte" class="compte"></div>
   </header>
 
+  <div class="bandeau" id="bandeau" aria-live="polite">
+    <span class="bandeau-etiquette"><i></i>Dernière minute</span>
+    <div class="bandeau-derniere" id="bandeau-derniere"></div>
+    <div class="bandeau-defile" aria-hidden="true"><div id="bandeau-defile"></div></div>
+  </div>
+
   <main class="grille">
     <section class="principal">
       <nav class="onglets" id="onglets">
         <button data-onglet="ouverts" class="actif">Paris en cours</button>
         <button data-onglet="clos">Paris clôturés</button>
         <button data-onglet="mes-mises">Mes mises</button>
+        <button data-onglet="proposer">+ Proposer un pari</button>
         <button data-onglet="admin" id="onglet-admin" hidden>Administration</button>
       </nav>
 
       <div id="vue-ouverts" class="vue"></div>
       <div id="vue-clos" class="vue" hidden></div>
       <div id="vue-mes-mises" class="vue" hidden></div>
+
+      <div id="vue-proposer" class="vue" hidden>
+        <div class="carte">
+          <h2>Proposer un pari</h2>
+          <p class="aide">Votre pari est ouvert aux mises dès sa création. L'administration déclare l'issue réalisée
+            (ou annule le pari s'il est ambigu) : précisez bien la règle d'arbitrage.</p>
+          <p id="proposer-connexion" class="vide" hidden>Connectez-vous ou créez un compte (en haut à droite) pour proposer un pari.</p>
+          <form id="form-pari" class="form-pari">
+            <label>Intitulé<input name="titre" required minlength="5" maxlength="200" placeholder="Ex. : Le 49.3 sera-t-il utilisé ?"></label>
+            <div class="deux-colonnes">
+              <label>Catégorie<input name="categorie" maxlength="40" placeholder="Procédure, Vote, Chiffres…" list="categories"></label>
+              <label>Fin des mises (facultatif)<input name="date_limite" type="datetime-local"></label>
+            </div>
+            <label>Précisions / règle d'arbitrage<textarea name="description" rows="2" maxlength="500"></textarea></label>
+            <fieldset>
+              <legend>Issues possibles</legend>
+              <div id="issues-form"></div>
+              <div class="ligne-form">
+                <button type="button" class="secondaire" id="ajout-issue">+ Ajouter une issue</button>
+              </div>
+            </fieldset>
+            <button type="submit">Publier le pari</button>
+          </form>
+          <datalist id="categories"></datalist>
+        </div>
+      </div>
 
       <div id="vue-admin" class="vue" hidden>
         <div id="admin-connexion" class="carte">
@@ -41,29 +74,9 @@
         </div>
 
         <div id="admin-contenu" hidden>
-          <div class="carte">
-            <div class="carte-titre">
-              <h2>Nouveau pari</h2>
-              <button class="lien" id="admin-deconnexion">Quitter l'administration</button>
-            </div>
-            <form id="form-pari" class="form-pari">
-              <label>Intitulé<input name="titre" required placeholder="Ex. : Le 49.3 sera-t-il utilisé ?"></label>
-              <div class="deux-colonnes">
-                <label>Catégorie<input name="categorie" placeholder="Procédure, Vote, Chiffres…" list="categories"></label>
-                <label>Fin des mises (facultatif)<input name="date_limite" type="datetime-local"></label>
-              </div>
-              <label>Précisions / règle d'arbitrage<textarea name="description" rows="2"></textarea></label>
-              <fieldset>
-                <legend>Issues possibles et probabilités (%)</legend>
-                <div id="issues-form"></div>
-                <div class="ligne-form">
-                  <button type="button" class="secondaire" id="ajout-issue">+ Ajouter une issue</button>
-                  <span id="somme-probas" class="aide"></span>
-                </div>
-              </fieldset>
-              <button type="submit">Créer le pari</button>
-            </form>
-            <datalist id="categories"></datalist>
+          <div class="carte carte-titre">
+            <p class="aide">Pour créer un pari, utilisez l'onglet « Proposer un pari ».</p>
+            <button class="lien" id="admin-deconnexion">Quitter l'administration</button>
           </div>
           <h2 class="titre-section">Gestion des paris</h2>
           <div id="admin-paris"></div>
@@ -88,9 +101,13 @@
         <ul>
           <li>Chaque joueur démarre avec <b id="capital">1000</b> clochettes 🔔.</li>
           <li>Répartissez-les librement entre les issues des paris ouverts.</li>
-          <li>La cote d'une issue vaut 1 / probabilité : plus l'issue est improbable, plus elle rapporte.</li>
-          <li>La cote est figée au moment où vous misez.</li>
-          <li>À la clôture, une mise gagnante rapporte <i>mise × cote</i> ; une mise perdante est perdue.</li>
+          <li>Les cotes dépendent des mises des joueurs : moins les autres croient à une issue, plus elle rapporte.
+            Elles bougent à chaque mise, jusqu'à la clôture.</li>
+          <li>Pour que les cotes soient intéressantes dès l'ouverture, la banque mise <b id="amorce">100</b> 🔔 sur
+            chaque issue (un Oui/Non démarre à ×2). Cote d'une issue = <i>(cagnotte + mises de la banque) ÷
+            (mises sur l'issue + mise de la banque)</i>.</li>
+          <li>À la clôture, chaque mise gagnante rapporte <i>mise × cote finale</i> ; une mise perdante est perdue.</li>
+          <li>Chacun peut proposer des paris (5 par jour au plus).</li>
           <li>Les gains sont immédiatement réinvestissables sur les paris encore ouverts.</li>
           <li>Pari annulé : les mises sont remboursées.</li>
           <li>Le classement compte les clochettes disponibles + celles engagées sur des paris en cours.</li>

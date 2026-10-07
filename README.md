@@ -21,6 +21,8 @@ La base (`data/*.db`) n'est jamais écrasée.
 Facultatif :
 - variable `FTP_DOSSIER` (onglet *Variables*) : dossier cible, `www/` par défaut (ex. `www/plf/`, avec le `/` final) ;
 - variable `PLF_CAPITAL` : clochettes de départ (1000 par défaut) ;
+- variable `PLF_AMORCE` : mise fictive de la banque sur chaque issue, qui fixe les cotes de départ
+  et leur stabilité (100 par défaut, 0 pour un pari mutuel pur) ;
 - secrets `PLF_DB_DSN`, `PLF_DB_USER`, `PLF_DB_PASSWORD` : utiliser MySQL au lieu de SQLite
   (DSN : `mysql:host=XXX.mysql.db;dbname=XXX;charset=utf8mb4`).
 
@@ -30,6 +32,12 @@ Administration du jeu : adresse du site suivie de `#admin`.
 Côté OVH, une seule chose : activer le certificat SSL (onglet *Informations générales*). Pour un
 sous-domaine dédié (`paris.mondomaine.fr`) : onglet *Multisite* → *Ajouter un domaine*, dossier
 racine identique à `FTP_DOSSIER`.
+
+## Mises à jour de la base
+
+La structure de la base et les nouveaux paris livrés avec le code sont appliqués automatiquement au
+premier appel après le déploiement (version enregistrée dans la table `reglages`), sans toucher aux
+joueurs ni aux mises existants.
 
 ## Sauvegarde des données
 

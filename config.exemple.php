@@ -7,6 +7,10 @@ return [
     // Clochettes de départ par joueur.
     'capital' => 1000,
 
+    // Mise fictive de la banque sur chaque issue d'un pari : rend les cotes attrayantes dès l'ouverture
+    // (×2 sur un Oui/Non) et les stabilise tant qu'il y a peu de mises. 0 : pari mutuel pur.
+    'amorce' => 100,
+
     // Base de données : par défaut, un fichier SQLite dans data/ (rien à configurer).
     // Pour utiliser MySQL à la place (espace client OVH → Hébergements → Bases de données) :
     // 'db' => [
