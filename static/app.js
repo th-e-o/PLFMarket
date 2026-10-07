@@ -44,8 +44,9 @@ async function api(chemin, { method, body } = {}) {
 
 async function action(promesse, messageSucces) {
   try {
-    await promesse;
-    if (messageSucces) toast(messageSucces, "succes");
+    const reponse = await promesse;
+    const message = typeof messageSucces === "function" ? messageSucces(reponse) : messageSucces;
+    if (message) toast(message, "succes");
     await rafraichir();
     return true;
   } catch (e) {
@@ -53,6 +54,8 @@ async function action(promesse, messageSucces) {
     return false;
   }
 }
+
+const avecBonus = (r) => (r.bonus_question ? ` ⭐ +${nb(r.bonus_question)} 🪙 de bonus pour avoir répondu à la question du jour !` : "");
 
 let toastTimer;
 function toast(texte, type = "") {
@@ -172,8 +175,12 @@ const optionsEquipes = (choisie = null, vide = "— Sans équipe —") => `<opti
 
 function rendreCompte() {
   const moi = etat.moi;
+  const b = etat.bonus;
+  const bonus = !moi || !b.montant ? "" : b.disponible
+    ? `<button class="bonus-pret" data-action="bonus" title="Bonus quotidien : ${nb(b.montant)} deniers publics toutes les 24 heures">🎁 +${nb(b.montant)}</button>`
+    : `<span class="bonus-attente" title="Prochain bonus quotidien de ${nb(b.montant)} 🪙">🎁 <span data-fin="${esc(b.prochain)}" data-sorte="bonus"></span></span>`;
   const html = moi
-    ? `<div class="solde">
+    ? `${bonus}<div class="solde">
          <div class="bloc"><small>Disponible</small><b>${nb(moi.disponible)} 🪙</b></div>
          <div class="bloc"><small>En jeu</small><b>${nb(moi.en_jeu)}</b></div>
          <div class="bloc"><small>Rang</small><b>${moi.rang}<sup>${moi.rang === 1 ? "er" : "e"}</sup></b></div>
@@ -220,6 +227,10 @@ function texteEvenement(e) {
         + (e.nb_tardives ? ` ${pluriel(e.nb_tardives, "mise tardive")} remboursée${e.nb_tardives > 1 ? "s" : ""}.` : "") + "</span>";
     case "annule":
       return `↩️ <b>${esc(e.pari)}</b> annulé, mises remboursées.`;
+    case "bonus":
+      return e.sorte === "question"
+        ? `⭐ <b>${esc(e.joueur)}</b> répond à la question du jour${e.pari ? ` « ${esc(e.pari)} »` : ""} (+${nb(e.montant)} 🪙)`
+        : `🎁 <b>${esc(e.joueur)}</b> récupère son bonus quotidien (+${nb(e.montant)} 🪙)`;
     case "depeche":
       return `<span class="evt-depeche">📰 <b>Dépêche</b> : ${esc(e.texte)}</span>`;
     case "mouvement":
@@ -282,6 +293,10 @@ function badgeStatut(p) {
   return `<span class="badge ${p.statut}">${libelles[p.statut]}</span>`;
 }
 
+/** Minuteur de fin des mises d'un pari ouvert qui a une date limite (les paris flash ont leur propre bandeau). */
+const minuteur = (p) => p.accepte_mises && p.date_limite && !p.flash
+  ? `<span class="minuteur" title="Fin des mises le ${esc(fmtDate(p.date_limite))}">⏳ <span data-fin="${esc(p.date_limite)}" data-sorte="pari"></span></span>` : "";
+
 function listeParis(paris, messageVide) {
   if (!paris.length) return `<p class="vide">${messageVide}</p>`;
   const enTete = (p) => (p.flash && p.accepte_mises ? 0 : 1);
@@ -310,7 +325,7 @@ function blocCommentaires(p) {
 
 function cartePari(p) {
   const meta = [];
-  if (p.date_limite && p.statut === "ouvert") meta.push(`${p.accepte_mises ? "Mises jusqu'au" : "Mises closes le"} ${fmtDate(p.date_limite)}`);
+  if (p.date_limite && p.statut === "ouvert" && !p.accepte_mises) meta.push(`Mises closes le ${fmtDate(p.date_limite)}`);
   if (p.clos_le) meta.push(`Clôturé le ${fmtDate(p.clos_le)}`);
   meta.push(`${pluriel(p.nb_joueurs, "joueur")} · cagnotte ${nb(p.total_mise)} 🪙`);
   const etape = etat.etapes.find((e) => e.id === p.etape_id);
@@ -322,6 +337,7 @@ function cartePari(p) {
         ${p.categorie ? `<span class="badge">${esc(p.categorie)}</span>` : ""}
         ${p.type === "estimation" ? `<span class="badge estimation">Chiffre</span>` : ""}
         ${badgeStatut(p)}
+        ${minuteur(p)}
         ${etape ? `<button class="badge etape" data-onglet="calendrier" title="Voir le calendrier">📅 ${fmtJour(etape.date)} · ${esc(etape.titre)}</button>` : ""}
         <span class="meta">${meta.join(" · ")}</span>
         <button class="lien lien-pari" data-action="copier-lien" data-pari-lien="${p.id}" title="Copier le lien vers ce pari">🔗 Lien</button>
@@ -538,7 +554,7 @@ function tuileTendance(t) {
   const tete = t.issues[0];
   return `
     <article class="tuile">
-      <div class="tuile-entete">${p.categorie ? `<span class="badge">${esc(p.categorie)}</span>` : ""}
+      <div class="tuile-entete">${p.categorie ? `<span class="badge">${esc(p.categorie)}</span>` : ""}${minuteur(p)}
         ${p.flash && p.accepte_mises ? `<span class="badge flash">⚡ <span data-fin="${esc(p.date_limite)}"></span></span>` : ""}
         ${p.statut === "suspendu" ? `<span class="badge suspendu">Suspendu</span>` : ""}</div>
       <a class="tuile-titre" href="#pari-${p.id}">${esc(p.titre)}</a>
@@ -561,6 +577,18 @@ function tuileTendance(t) {
     </article>`;
 }
 
+/** Bonus quotidien sur l'accueil : à récupérer, ou compte à rebours et série de jours. */
+function blocBonus() {
+  const b = etat.bonus;
+  if (!b.montant) return "";
+  const serie = b.serie >= 2 ? ` · 🔥 ${b.serie} jours d'affilée` : "";
+  return b.disponible
+    ? `<div class="hero-bonus pret">🎁 Votre bonus quotidien vous attend : <b>${nb(b.montant)} deniers publics</b>${serie}
+        <button data-action="bonus">Récupérer</button></div>`
+    : `<div class="hero-bonus">🎁 Bonus récupéré${serie}. Prochain dans <b data-fin="${esc(b.prochain)}" data-sorte="bonus"></b> :
+        revenez demain !</div>`;
+}
+
 /** Pari du jour : mise directe depuis l'accueil, grand graphique des probabilités. */
 function blocPariDuJour() {
   if (!etat.pari_du_jour) return "";
@@ -570,12 +598,15 @@ function blocPariDuJour() {
   const ordre = t ? t.issues.map((i) => p.issues.find((x) => x.id === i.id)) : p.issues;
   return `
     <section class="carte pari-du-jour" id="pari-du-jour">
-      <div class="pdj-entete"><span class="pdj-etiquette">⭐ Pari du jour</span>
+      <div class="pdj-entete"><span class="pdj-etiquette">⭐ Pari du jour</span>${minuteur(p)}
         <span class="aide">${etat.pari_du_jour.choisi ? "choisi par l'organisation" : "le plus animé des dernières 24 heures"}</span>
         ${p.flash ? `<span class="badge flash">⚡ <span data-fin="${esc(p.date_limite)}"></span></span>` : ""}
         <button class="lien lien-pari" data-action="copier-lien" data-pari-lien="${p.id}">🔗 Lien</button></div>
       <h2><a href="#pari-${p.id}">${esc(p.titre)}</a></h2>
       ${p.description ? `<p class="desc">${esc(p.description)}</p>` : ""}
+      ${etat.bonus.question.montant ? `<p class="pdj-bonus${etat.bonus.question.obtenu ? " obtenu" : ""}">${etat.bonus.question.obtenu
+        ? `✅ Vous avez déjà eu aujourd'hui votre bonus de ${nb(etat.bonus.question.montant)} 🪙 pour la question du jour.`
+        : `🎁 <b>+${nb(etat.bonus.question.montant)} deniers publics offerts</b> pour votre première mise du jour sur cette question, quelle que soit votre réponse.`}</p>` : ""}
       <div class="pdj-corps">
         <div class="pdj-issues">${p.type === "estimation" ? blocEstimation(p)
           : `<div class="issues">${ordre.map((i) => ligneIssue(p, i, "pj")).join("")}</div>`}
@@ -618,7 +649,7 @@ function vueAccueil() {
       ${depeche ? `<p class="hero-depeche">📰 <b>${esc(depeche.texte)}</b> <span>· ${ilYa(depeche.date)}</span></p>` : ""}
       ${enDirect.length ? `<ul class="hero-flux">${enDirect.map((e) => `<li><time>${ilYa(e.date)}</time> ${texteEvenement(e)}</li>`).join("")}</ul>` : ""}
       ${moi ? `<p class="accueil-moi">Vous avez <b>${nb(moi.disponible)} 🪙</b> à miser · ${moi.rang}<sup>${moi.rang === 1 ? "er" : "e"}</sup> sur ${etat.classement.length}
-          · <button class="lien" data-fiche="${moi.id}">ma fiche</button></p>`
+          · <button class="lien" data-fiche="${moi.id}">ma fiche</button></p>${blocBonus()}`
         : `<div class="appel"><button data-onglet="inscription">Créer un compte · ${nb(etat.capital)} 🪙 offerts</button>
            <span>Déjà inscrit ? Connectez-vous en haut à droite.</span></div>`}
     </section>
@@ -813,9 +844,17 @@ function majComptesARebours() {
   let flashOuvert = false, termine = false;
   $$("[data-fin]").forEach((el) => {
     const reste = Math.max(0, Math.round((new Date(el.dataset.fin) - maintenant) / 1000));
-    el.textContent = reste >= 60 ? `${Math.floor(reste / 60)} min ${String(reste % 60).padStart(2, "0")} s` : `${reste} s`;
-    el.closest(".pari")?.classList.toggle("urgent", reste <= 60);
-    if (reste > 0) flashOuvert = true; else termine = true;
+    el.textContent = reste >= 86400 ? `${Math.floor(reste / 86400)} j ${Math.floor(reste % 86400 / 3600)} h`
+      : reste >= 3600 ? `${Math.floor(reste / 3600)} h ${String(Math.floor(reste % 3600 / 60)).padStart(2, "0")} min`
+      : reste >= 60 ? `${Math.floor(reste / 60)} min ${String(reste % 60).padStart(2, "0")} s` : `${reste} s`;
+    const puce = el.closest(".minuteur");
+    if (puce) {
+      puce.classList.toggle("bientot", reste < 86400);
+      puce.classList.toggle("urgent", reste < 3600);
+    } else if (!el.dataset.sorte) {
+      el.closest(".pari")?.classList.toggle("urgent", reste <= 60); // pari flash
+    }
+    if (reste > 0) { if (!el.dataset.sorte) flashOuvert = true; } else termine = true;
   });
   document.title = (flashOuvert ? "⚡ " : "") + "Les paris du PLF";
   if (termine && !majComptesARebours.enCours) {
@@ -1005,7 +1044,9 @@ function vueAdminParis() {
         restent toujours en tête). Les nouveaux paris arrivent en fin de liste.</p>
       ${actifs.length ? `<ol class="liste-ordre">${actifs.map((p, k) => `
         <li data-pari="${p.id}">
-          <span class="ordre-titre">${p.flash ? "⚡ " : ""}${esc(p.titre)}${p.statut === "suspendu" ? ` <span class="badge suspendu">suspendu</span>` : ""}</span>
+          <span class="ordre-titre">${p.flash ? "⚡ " : ""}${esc(p.titre)}${p.statut === "suspendu" ? ` <span class="badge suspendu">suspendu</span>` : ""}
+            ${p.date_limite ? `<span class="aide">⏳ ${fmtDate(p.date_limite)}</span>`
+              : `<span class="sans-date" title="Fixez une date de fin (« Modifier le pari ») pour afficher un minuteur">sans date limite</span>`}</span>
           <span class="ordre-boutons">
             <button class="secondaire" data-action="admin-deplacer" data-sens="haut" title="Tout en haut" ${k === 0 ? "disabled" : ""}>⤒</button>
             <button class="secondaire" data-action="admin-deplacer" data-sens="monter" title="Monter" ${k === 0 ? "disabled" : ""}>↑</button>
@@ -1086,14 +1127,19 @@ function vueAdminReglages() {
       <div class="actions">
         <label class="aide">Capital de départ <input type="number" min="0" step="1" data-k="r-capital" value="${etat.capital}" class="petit"></label>
         <label class="aide">Amorce de la banque, par issue <input type="number" min="0" step="1" data-k="r-amorce" value="${etat.amorce}" class="petit"></label>
+        <label class="aide">Bonus quotidien <input type="number" min="0" step="1" data-k="r-bonus" value="${d.bonus}" class="petit"></label>
+        <label class="aide">Bonus question du jour <input type="number" min="0" step="1" data-k="r-bonus-question" value="${d.bonus_question}" class="petit"></label>
         <button data-action="admin-reglages">Enregistrer</button>
-        <button class="lien" data-action="admin-reglages-defaut">Revenir aux valeurs par défaut (${nb(d.capital_defaut)} / ${nb(d.amorce_defaut)})</button>
+        <button class="lien" data-action="admin-reglages-defaut">Revenir aux valeurs par défaut
+          (${nb(d.capital_defaut)} / ${nb(d.amorce_defaut)} / ${nb(d.bonus_defaut)} / ${nb(d.bonus_question_defaut)})</button>
       </div>
       <ul class="aide">
         <li>Le capital s'applique rétroactivement : changer 1 000 en 1 500 ajoute 500 🪙 à chaque joueur.</li>
         <li>L'amorce change immédiatement les cotes de tous les paris en cours (pas ceux déjà clôturés).
           Plus elle est haute, plus les cotes sont stables ; 0 = pari mutuel pur. C'est aussi l'apport de la
           banque à la cagnotte des paris sur un chiffre.</li>
+        <li>Bonus quotidien : récupérable par chaque joueur toutes les 24 heures (0 = désactivé). Bonus question du
+          jour : offert à la première mise du jour sur la question du jour, quelle que soit la réponse (0 = désactivé).</li>
         <li>Ces valeurs priment sur les variables GitHub <code>PLF_CAPITAL</code> et <code>PLF_AMORCE</code>.</li>
       </ul>
     </div>
@@ -1457,7 +1503,7 @@ document.addEventListener("submit", async (ev) => {
     const montant = parseInt(form.montant.value, 10);
     if (!(montant > 0)) return toast("Indiquez une mise d'au moins 1 denier public.", "erreur");
     const body = { issue_id: Number(form.dataset.issue), montant, estimation: form.estimation.value };
-    await action(api("mises", { body }), `Estimation enregistrée, ${nb(montant)} 🪙 misés !`);
+    await action(api("mises", { body }), (r) => `Estimation enregistrée, ${nb(montant)} 🪙 misés !` + avecBonus(r));
   } else if (form.classList.contains("miser")) {
     const input = $("input", form);
     const montant = parseInt(input.value, 10);
@@ -1465,7 +1511,7 @@ document.addEventListener("submit", async (ev) => {
     const cle = input.dataset.k;
     input.value = ""; // vidé avant le rafraîchissement, qui conserve les saisies en cours
     const ok = await action(api("mises", { body: { issue_id: Number(form.dataset.issue), montant } }),
-      `Mise de ${nb(montant)} 🪙 enregistrée !`);
+      (r) => `Mise de ${nb(montant)} 🪙 enregistrée !` + avecBonus(r));
     if (!ok) { const champ = $(`[data-k="${cle}"]`); if (champ) champ.value = montant; }
     majGainsPotentiels();
   } else if (form.id === "form-admin") {
@@ -1523,6 +1569,10 @@ document.addEventListener("click", async (ev) => {
       break;
     case "copier-lien":
       await copierLien(bouton.dataset.pariLien);
+      break;
+    case "bonus":
+      await action(api("bonus", { method: "POST" }), (r) =>
+        `🎁 +${nb(r.montant)} deniers publics !` + (r.serie >= 2 ? ` 🔥 ${r.serie} jours d'affilée.` : "") + " Revenez dans 24 heures.");
       break;
     case "fermer-fiche":
       $("#fiche").close();
@@ -1635,11 +1685,12 @@ document.addEventListener("click", async (ev) => {
       await action(api(`admin/joueurs/${joueurId}/suppression`, { method: "POST" }), "Joueur supprimé.");
       break;
     case "admin-reglages":
-      await action(api("admin/reglages", { body: { capital: champ("r-capital").value, amorce: champ("r-amorce").value } }), "Réglages enregistrés.");
+      await action(api("admin/reglages", { body: { capital: champ("r-capital").value, amorce: champ("r-amorce").value,
+        bonus: champ("r-bonus").value, bonus_question: champ("r-bonus-question").value } }), "Réglages enregistrés.");
       break;
     case "admin-reglages-defaut":
-      champ("r-capital").value = champ("r-amorce").value = "";
-      await action(api("admin/reglages", { body: { capital: "", amorce: "" } }), "Valeurs par défaut rétablies.");
+      ["r-capital", "r-amorce", "r-bonus", "r-bonus-question"].forEach((k) => (champ(k).value = ""));
+      await action(api("admin/reglages", { body: { capital: "", amorce: "", bonus: "", bonus_question: "" } }), "Valeurs par défaut rétablies.");
       break;
     case "admin-invitation": {
       const code = champ("r-invitation").value.trim();

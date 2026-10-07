@@ -443,6 +443,29 @@ dialog.fiche h3, .fiche-profil h3 { font-size: .95rem; margin: 1rem 0 .3rem; }
 .liste-ordre .ordre-boutons button { padding: .15rem .5rem; line-height: 1.2; }
 .liste-ordre li::after { content: ""; display: block; clear: both; }
 
+/* Bonus quotidien et bonus de la question du jour ---------------------------- */
+.bonus-pret { background: #fcd34d; color: #5c3b00; font-weight: 800; animation: appel 2s ease-in-out infinite; }
+.bonus-pret:hover { filter: brightness(1.05); }
+@keyframes appel { 0%, 100% { box-shadow: 0 0 0 0 rgba(252, 211, 77, .7); } 50% { box-shadow: 0 0 0 7px rgba(252, 211, 77, 0); } }
+.bonus-attente { font-size: .85rem; color: var(--gris); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hero-bonus { margin-top: .8rem; padding: .55rem .8rem; border-radius: 6px; background: rgba(255,255,255,.12);
+  display: flex; flex-wrap: wrap; gap: .4rem .8rem; align-items: center; }
+.hero-bonus b { font-variant-numeric: tabular-nums; }
+.hero-bonus.pret { background: #fcd34d; color: #5c3b00; }
+.hero-bonus.pret button { background: var(--bleu); color: #fff; font-weight: 700; margin-left: auto; }
+.pdj-bonus { margin: .5rem 0 0; padding: .45rem .7rem; border-radius: 6px; background: #fef3c7; color: #5c3b00; font-size: .9rem; }
+.pdj-bonus.obtenu { background: var(--vert-clair); color: var(--vert); }
+@media (prefers-reduced-motion: reduce) { .bonus-pret { animation: none; } }
+
+/* Minuteur de fin des mises -------------------------------------------------- */
+.minuteur { display: inline-flex; align-items: center; gap: .25rem; font-size: .75rem; font-weight: 700; white-space: nowrap;
+  padding: .1rem .5rem; border-radius: 3px; background: #eef2ff; color: var(--bleu); font-variant-numeric: tabular-nums; cursor: help; }
+.minuteur.bientot { background: #feecc2; color: var(--or); }
+.minuteur.urgent { background: var(--rouge); color: #fff; }
+.minuteur.urgent span { animation: pulse 1s infinite; }
+@media (prefers-reduced-motion: reduce) { .minuteur.urgent span { animation: none; } }
+.sans-date { font-size: .75rem; color: var(--or); border: 1px dashed currentColor; border-radius: 3px; padding: 0 .35rem; cursor: help; }
+
 .toast {
   position: fixed; bottom: 1.2rem; left: 50%; transform: translateX(-50%);
   background: var(--texte); color: #fff; padding: .7rem 1.1rem; border-radius: 6px;

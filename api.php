@@ -42,7 +42,8 @@ const PARIS_V2 = [
      "Déficit public prévu par la loi de finances initiale promulguée.", ['Oui', 'Non']],
 ];
 
-const VERSION_BASE = 9;
+const VERSION_BASE = 10;
+const BONUS_DELAI = 86400; // un bonus quotidien toutes les 24 heures (glissantes)
 const PROPOSITIONS_PAR_JOUR = 5;
 const DUREES_FLASH = [2, 5, 10, 15, 30, 60]; // minutes
 const COMMENTAIRE_MAX = 280; // caractères
@@ -135,6 +136,8 @@ if (!is_file(__DIR__ . '/config.php')) {
 define('CONFIG', require __DIR__ . '/config.php');
 const CAPITAL_DEFAUT = CONFIG['capital'] ?? 1000;
 const AMORCE_DEFAUT = CONFIG['amorce'] ?? 100;
+const BONUS_DEFAUT = CONFIG['bonus'] ?? 100;
+const BONUS_QUESTION_DEFAUT = CONFIG['bonus_question'] ?? 50;
 // Sans base MySQL configurée : fichier SQLite dans data/ (créé automatiquement, protégé par data/.htaccess).
 define('DB', CONFIG['db'] ?? ['dsn' => 'sqlite:' . __DIR__ . '/data/plf.db']);
 
@@ -201,6 +204,18 @@ function capital(): int
 function amorce(): int
 {
     return max(0, reglage('amorce', (int)AMORCE_DEFAUT));
+}
+
+/** Bonus offert à la première mise du jour sur la question du jour (0 : désactivé). */
+function bonus_question(): int
+{
+    return max(0, reglage('bonus_question', (int)BONUS_QUESTION_DEFAUT));
+}
+
+/** Montant du bonus quotidien (0 : désactivé). */
+function bonus_quotidien(): int
+{
+    return max(0, reglage('bonus', (int)BONUS_DEFAUT));
 }
 
 function version_base(PDO $pdo): int
@@ -346,6 +361,19 @@ function migrer(PDO $pdo, int $version): void
                             ORDER BY date_limite IS NULL, date_limite, id")->fetchAll(PDO::FETCH_COLUMN);
         $maj = $pdo->prepare('UPDATE paris SET position = ? WHERE id = ?');
         foreach ($ids as $n => $id) $maj->execute([$n + 1, $id]);
+    }
+    if ($version < 10) { // bonus quotidien
+        foreach (est_sqlite() ? [
+            "CREATE TABLE IF NOT EXISTS bonus (id INTEGER PRIMARY KEY, joueur_id INTEGER NOT NULL, montant INTEGER NOT NULL,
+                 cree_le TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'quotidien', pari_id INTEGER)",
+            'CREATE INDEX IF NOT EXISTS idx_bonus_joueur ON bonus(joueur_id, cree_le)',
+        ] : [
+            "CREATE TABLE IF NOT EXISTS bonus (id INT AUTO_INCREMENT PRIMARY KEY, joueur_id INT NOT NULL, montant INT NOT NULL,
+                 cree_le CHAR(19) NOT NULL, type VARCHAR(20) NOT NULL DEFAULT 'quotidien', pari_id INT NULL,
+                 INDEX (joueur_id, cree_le)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+        ] as $ordre) {
+            $pdo->exec($ordre);
+        }
     }
     $pdo->exec("DELETE FROM reglages WHERE cle IN ('version', 'revision')");
     $pdo->prepare("INSERT INTO reglages (cle, valeur) VALUES ('version', ?)")->execute([(string)VERSION_BASE]);
@@ -506,14 +534,15 @@ function soldes(?int $joueurId = null): array
                COALESCE(SUM(m.gain), 0) AS gains,
                COUNT(CASE WHEN p.statut = 'clos' AND m.tardive = 0 AND (m.issue_id = p.issue_gagnante_id
                           OR (p.type = 'estimation' AND m.gain > 0)) THEN 1 END) AS paris_gagnes,
-               (SELECT COALESCE(SUM(a.montant), 0) FROM ajustements a WHERE a.joueur_id = j.id) AS ajustements
+               (SELECT COALESCE(SUM(a.montant), 0) FROM ajustements a WHERE a.joueur_id = j.id) AS ajustements,
+               (SELECT COALESCE(SUM(b.montant), 0) FROM bonus b WHERE b.joueur_id = j.id) AS bonus
         FROM joueurs j
         LEFT JOIN mises m ON m.joueur_id = j.id
         LEFT JOIN paris p ON p.id = m.pari_id
         $filtre
         GROUP BY j.id, j.pseudo, j.equipe_id", $joueurId ? [$joueurId] : [])->fetchAll();
     return array_map(function ($l) {
-        $disponible = capital() + (int)$l['ajustements'] - (int)$l['mise_totale'] + (int)$l['gains'];
+        $disponible = capital() + (int)$l['ajustements'] + (int)$l['bonus'] - (int)$l['mise_totale'] + (int)$l['gains'];
         return [
             'id' => (int)$l['id'],
             'pseudo' => $l['pseudo'],
@@ -927,6 +956,8 @@ function route_etat(): array
         'admin' => !empty($_SESSION['admin']),
         'invitation' => reglage_texte('code_invitation') !== '',
         'moi' => $monClassement,
+        'bonus' => $moi ? etat_bonus((int)$moi['id']) : ['montant' => bonus_quotidien(), 'disponible' => false, 'prochain' => null,
+                                                         'serie' => 0, 'question' => ['montant' => bonus_question(), 'obtenu' => false]],
         'classement' => $joueurs,
         'equipes' => array_map(fn($e) => ['id' => (int)$e['id'], 'nom' => $e['nom']], $equipes),
         'classement_equipes' => classement_equipes($joueurs, $equipes),
@@ -935,7 +966,7 @@ function route_etat(): array
                               q('SELECT * FROM etapes ORDER BY date_etape, id')->fetchAll()),
         'paris' => $paris,
         'tendances' => $tendances,
-        'pari_du_jour' => pari_du_jour($paris, $tendances),
+        'pari_du_jour' => pari_du_jour(),
         'direct' => direct($paris, $joueurs),
         'depeches' => array_map(fn($d) => ['id' => (int)$d['id'], 'texte' => $d['texte'], 'date' => $d['cree_le']],
                                 q('SELECT * FROM depeches ORDER BY cree_le DESC, id DESC LIMIT 20')->fetchAll()),
@@ -1019,23 +1050,6 @@ function tendances(array $paris): array
     return $resultat;
 }
 
-/**
- * Pari du jour : celui choisi par l'administration (jusqu'à ce qu'elle en change), tant qu'il accepte les
- * mises ; sinon le plus animé des dernières 24 heures (puis la plus grosse cagnotte).
- */
-function pari_du_jour(array $paris, array $tendances): ?array
-{
-    $ouverts = array_values(array_filter($paris, fn($p) => $p['accepte_mises']));
-    if (!$ouverts) return null;
-    $choix = json_decode(reglage_texte('pari_du_jour') ?: 'null', true);
-    if ($choix) {
-        foreach ($ouverts as $p) if ($p['id'] === (int)$choix['id']) return ['id' => $p['id'], 'choisi' => true];
-    }
-    $volumes = array_column($tendances, 'volume_24h', 'pari_id');
-    usort($ouverts, fn($a, $b) => [$volumes[$b['id']] ?? 0, $b['total_mise']] <=> [$volumes[$a['id']] ?? 0, $a['total_mise']]);
-    return ['id' => $ouverts[0]['id'], 'choisi' => false];
-}
-
 /** Chiffres en direct de la page d'accueil. */
 function direct(array $paris, array $joueurs): array
 {
@@ -1051,6 +1065,93 @@ function direct(array $paris, array $joueurs): array
     ];
 }
 
+/**
+ * Bonus quotidien d'un joueur : montant, récupérable maintenant ou non, date du prochain (24 h après le dernier).
+ * @return array{montant: int, disponible: bool, prochain: ?string, serie: int}
+ */
+function etat_bonus(int $joueurId): array
+{
+    $dernier = q("SELECT MAX(cree_le) FROM bonus WHERE joueur_id = ? AND type = 'quotidien'", [$joueurId])->fetchColumn() ?: null;
+    $prochain = $dernier ? date('Y-m-d\TH:i:s', strtotime($dernier) + BONUS_DELAI) : null;
+    return [
+        'montant' => bonus_quotidien(),
+        'disponible' => bonus_quotidien() > 0 && (!$prochain || $prochain <= maintenant()),
+        'prochain' => $prochain && $prochain > maintenant() ? $prochain : null,
+        'serie' => serie_bonus($joueurId),
+        'question' => ['montant' => bonus_question(), 'obtenu' => bonus_question_obtenu($joueurId)],
+    ];
+}
+
+/** Jours consécutifs (calendaires) où le joueur a récupéré son bonus, jusqu'à aujourd'hui ou hier. */
+function serie_bonus(int $joueurId): int
+{
+    $jours = array_flip(array_map(fn($d) => substr($d, 0, 10),
+        q("SELECT cree_le FROM bonus WHERE joueur_id = ? AND type = 'quotidien' AND cree_le >= ?", [$joueurId, date('Y-m-d', time() - 60 * 86400)])
+            ->fetchAll(PDO::FETCH_COLUMN)));
+    $jour = isset($jours[date('Y-m-d')]) ? time() : time() - 86400;
+    $serie = 0;
+    while (isset($jours[date('Y-m-d', $jour)])) {
+        $serie++;
+        $jour -= 86400;
+    }
+    return $serie;
+}
+
+/** Le joueur a-t-il déjà eu aujourd'hui le bonus de la question du jour ? */
+function bonus_question_obtenu(int $joueurId): bool
+{
+    return (bool)q("SELECT 1 FROM bonus WHERE joueur_id = ? AND type = 'question' AND cree_le >= ?",
+                   [$joueurId, date('Y-m-d') . 'T00:00:00'])->fetch();
+}
+
+/**
+ * Pari du jour : celui choisi par l'administration (jusqu'à ce qu'elle en change), tant qu'il accepte les
+ * mises ; sinon le plus animé des dernières 24 heures (puis la plus grosse cagnotte).
+ * @return array{id: int, choisi: bool}|null
+ */
+function pari_du_jour(): ?array
+{
+    $ouverts = q("SELECT p.id FROM paris p WHERE p.statut = 'ouvert' AND (p.date_limite IS NULL OR p.date_limite > ?)
+                  ORDER BY (SELECT COALESCE(SUM(montant), 0) FROM mises WHERE pari_id = p.id AND tardive = 0 AND cree_le >= ?) DESC,
+                           (SELECT COALESCE(SUM(montant), 0) FROM mises WHERE pari_id = p.id AND tardive = 0) DESC, p.id",
+                 [substr(maintenant(), 0, 16), date('Y-m-d\TH:i:s', time() - 86400)])->fetchAll(PDO::FETCH_COLUMN);
+    if (!$ouverts) return null;
+    $choix = json_decode(reglage_texte('pari_du_jour') ?: 'null', true);
+    if ($choix && in_array((int)$choix['id'], array_map('intval', $ouverts), true)) return ['id' => (int)$choix['id'], 'choisi' => true];
+    return ['id' => (int)$ouverts[0], 'choisi' => false];
+}
+
+/**
+ * Bonus de la question du jour : crédité à la première mise du joueur sur la question du jour, une fois par
+ * jour (on ne cumule pas en misant sur chaque pari qui devient tour à tour la question du jour).
+ * @return int montant crédité (0 sinon)
+ */
+function crediter_bonus_question(int $joueurId, int $pariId, ?array $pariDuJour): int
+{
+    if (!$pariDuJour || $pariDuJour['id'] !== $pariId || bonus_question() === 0 || bonus_question_obtenu($joueurId)) return 0;
+    q("INSERT INTO bonus (joueur_id, montant, cree_le, type, pari_id) VALUES (?, ?, ?, 'question', ?)",
+      [$joueurId, bonus_question(), maintenant(), $pariId]);
+    return bonus_question();
+}
+
+/** Le joueur récupère son bonus quotidien (une fois toutes les 24 heures). */
+function route_bonus(): array
+{
+    $moi = joueur_connecte();
+    if (!$moi) throw new ErreurApi('Connectez-vous pour récupérer votre bonus.', 401);
+    if (bonus_quotidien() === 0) throw new ErreurApi("Le bonus quotidien est désactivé.", 409);
+    return transaction(function () use ($moi) {
+        lire_joueur((int)$moi['id']); // verrou : un seul bonus même en cas de double clic
+        $etat = etat_bonus((int)$moi['id']);
+        if (!$etat['disponible']) {
+            $reste = strtotime($etat['prochain']) - time();
+            throw new ErreurApi(sprintf('Bonus déjà récupéré : revenez dans %d h %02d min.', intdiv($reste, 3600), intdiv($reste % 3600, 60)), 409);
+        }
+        q("INSERT INTO bonus (joueur_id, montant, cree_le, type) VALUES (?, ?, ?, 'quotidien')", [$moi['id'], bonus_quotidien(), maintenant()]);
+        return ['ok' => true, 'montant' => bonus_quotidien(), 'serie' => serie_bonus((int)$moi['id'])];
+    });
+}
+
 /** Clé de l'état : change à chaque écriture, à la connexion ou à la déconnexion, et chaque minute (dates limites). */
 function cle_etat(): string
 {
@@ -1059,12 +1160,12 @@ function cle_etat(): string
                                     date('Y-m-d H:i')])), 0, 12);
 }
 
-/** Courbes des deniers publics (total) de chaque joueur : le total ne change qu'aux clôtures et ajustements. */
+/** Courbes des deniers publics (total) de chaque joueur : le total ne change qu'aux clôtures, ajustements et bonus. */
 function route_historique_joueurs(): array
 {
     session_write_close();
     $variations = [];
-    foreach (q('SELECT joueur_id, cree_le, montant FROM ajustements') as $a) {
+    foreach (q('SELECT joueur_id, cree_le, montant FROM ajustements UNION ALL SELECT joueur_id, cree_le, montant FROM bonus') as $a) {
         $variations[$a['joueur_id']][] = [$a['cree_le'], (int)$a['montant']];
     }
     foreach (q("SELECT m.joueur_id, p.clos_le, SUM(COALESCE(m.gain, 0) - m.montant) AS net
@@ -1103,7 +1204,10 @@ function route_fiche(): array
     $ligne = current(array_filter($classement, fn($x) => $x['id'] === $id));
     // Le total ne change qu'aux clôtures et aux ajustements : variation = somme des changements récents
     $changements = [];
-    foreach (q('SELECT cree_le, montant FROM ajustements WHERE joueur_id = ?', [$id]) as $a) $changements[] = [$a['cree_le'], (int)$a['montant']];
+    foreach (q('SELECT cree_le, montant FROM ajustements WHERE joueur_id = ? UNION ALL SELECT cree_le, montant FROM bonus WHERE joueur_id = ?',
+               [$id, $id]) as $a) {
+        $changements[] = [$a['cree_le'], (int)$a['montant']];
+    }
     $resultats = q("SELECT m.pari_id, p.titre, p.clos_le, p.type, SUM(m.montant) AS mise, SUM(m.gain) AS gain,
                            MAX(CASE WHEN m.issue_id = p.issue_gagnante_id THEN 1 ELSE 0 END) AS sur_gagnante
                     FROM mises m JOIN paris p ON p.id = m.pari_id
@@ -1271,6 +1375,11 @@ function fil_actualite(int $limite = 30, array $trophees = [], array $tendances 
         ORDER BY c.cree_le DESC, c.id DESC LIMIT $limite") as $c) {
         $evenements[] = ['date' => $c['cree_le'], 'type' => 'commentaire', 'joueur' => $c['pseudo'], 'pari' => $c['titre'],
                          'texte' => $c['texte']];
+    }
+    foreach (q("SELECT b.cree_le, b.montant, b.type, j.pseudo, p.titre FROM bonus b JOIN joueurs j ON j.id = b.joueur_id
+                LEFT JOIN paris p ON p.id = b.pari_id ORDER BY b.cree_le DESC, b.id DESC LIMIT $limite") as $b) {
+        $evenements[] = ['date' => $b['cree_le'], 'type' => 'bonus', 'sorte' => $b['type'], 'joueur' => $b['pseudo'],
+                         'montant' => (int)$b['montant'], 'pari' => $b['titre']];
     }
     foreach (q("SELECT texte, cree_le FROM depeches ORDER BY cree_le DESC, id DESC LIMIT $limite") as $d) {
         $evenements[] = ['date' => $d['cree_le'], 'type' => 'depeche', 'texte' => $d['texte']];
@@ -1485,6 +1594,7 @@ function miser(int $joueurId, array $d, bool $parAdmin): array
 
     return transaction(function () use ($joueurId, $montant, $issueId, $parAdmin, $d) {
         $joueur = lire_joueur($joueurId); // verrouillé : une mise à la fois par joueur
+        $pariDuJour = $parAdmin ? null : pari_du_jour(); // avant la mise, qui peut changer le pari le plus animé
         $issue = q('SELECT * FROM issues WHERE id = ?', [$issueId])->fetch();
         if (!$issue) throw new ErreurApi('Issue introuvable.', 404);
         $pari = lire_pari((int)$issue['pari_id'], true);
@@ -1503,7 +1613,8 @@ function miser(int $joueurId, array $d, bool $parAdmin): array
             }
             q('INSERT INTO mises (joueur_id, pari_id, issue_id, montant, cote_c, cree_le, par_admin, estimation, tapis) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)',
               [$joueurId, $pari['id'], $issueId, $montant, maintenant(), (int)$parAdmin, $estimation, (int)($montant === $disponible)]);
-            return ['ok' => true, 'cote' => null, 'gain_estime' => null];
+            return ['ok' => true, 'cote' => null, 'gain_estime' => null,
+                    'bonus_question' => crediter_bonus_question($joueurId, (int)$pari['id'], $pariDuJour)];
         }
         $masse = $montant + (int)q('SELECT COALESCE(SUM(montant), 0) FROM mises WHERE pari_id = ?', [$pari['id']])->fetchColumn();
         $masseIssue = $montant + (int)q('SELECT COALESCE(SUM(montant), 0) FROM mises WHERE issue_id = ?', [$issueId])->fetchColumn();
@@ -1514,7 +1625,8 @@ function miser(int $joueurId, array $d, bool $parAdmin): array
         q('INSERT INTO mises (joueur_id, pari_id, issue_id, montant, cote_c, cree_le, par_admin, tapis) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
           [$joueurId, $pari['id'], $issueId, $montant, (int)floor($cote * 100), maintenant(), (int)$parAdmin, (int)($montant === $disponible)]);
         capturer_cotes((int)$pari['id']);
-        return ['ok' => true, 'cote' => $cote, 'gain_estime' => intdiv($montant * a_verser($masse, $masseIssue, $n, $w), $masseIssue)];
+        return ['ok' => true, 'cote' => $cote, 'gain_estime' => intdiv($montant * a_verser($masse, $masseIssue, $n, $w), $masseIssue),
+                'bonus_question' => crediter_bonus_question($joueurId, (int)$pari['id'], $pariDuJour)];
     });
 }
 
@@ -1853,6 +1965,7 @@ function route_admin_joueur_suppression(int $joueurId): array
         q('DELETE FROM mises WHERE joueur_id = ?', [$joueurId]);
         q('DELETE FROM commentaires WHERE joueur_id = ?', [$joueurId]);
         q('DELETE FROM ajustements WHERE joueur_id = ?', [$joueurId]);
+        q('DELETE FROM bonus WHERE joueur_id = ?', [$joueurId]);
         q('UPDATE paris SET auteur_id = NULL WHERE auteur_id = ?', [$joueurId]);
         q('DELETE FROM joueurs WHERE id = ?', [$joueurId]);
         return ['ok' => true];
@@ -1864,7 +1977,7 @@ function route_admin_reglages(): array
 {
     $d = donnees();
     return transaction(function () use ($d) {
-        foreach (['capital' => [0, 1000000], 'amorce' => [0, 100000]] as $cle => [$min, $max]) {
+        foreach (['capital' => [0, 1000000], 'amorce' => [0, 100000], 'bonus' => [0, 100000], 'bonus_question' => [0, 100000]] as $cle => [$min, $max]) {
             if (!array_key_exists($cle, $d)) continue;
             q('DELETE FROM reglages WHERE cle = ?', [$cle]);
             if ($d[$cle] === '' || $d[$cle] === null) continue;
@@ -1894,6 +2007,10 @@ function donnees_admin(): array
         'code_invitation' => reglage_texte('code_invitation'),
         'suspendus_en_bloc' => suspendus_en_bloc(),
         'capital_defaut' => (int)CAPITAL_DEFAUT,
+        'bonus_defaut' => (int)BONUS_DEFAUT,
+        'bonus' => bonus_quotidien(),
+        'bonus_question_defaut' => (int)BONUS_QUESTION_DEFAUT,
+        'bonus_question' => bonus_question(),
         'amorce_defaut' => (int)AMORCE_DEFAUT,
         'mises' => array_map(fn($m) => [
             'id' => (int)$m['id'], 'joueur_id' => (int)$m['joueur_id'], 'pari_id' => (int)$m['pari_id'],
@@ -2050,7 +2167,7 @@ function route_admin_sauvegarde(): never
         }
     }
     $export = ['exporte_le' => maintenant(), 'version' => VERSION_BASE];
-    foreach (['reglages', 'joueurs', 'equipes', 'etapes', 'paris', 'issues', 'mises', 'ajustements', 'cotes_historique', 'commentaires', 'depeches'] as $table) {
+    foreach (['reglages', 'joueurs', 'equipes', 'etapes', 'paris', 'issues', 'mises', 'ajustements', 'cotes_historique', 'commentaires', 'depeches', 'bonus'] as $table) {
         $export[$table] = q("SELECT * FROM $table")->fetchAll();
     }
     header('Content-Type: application/json; charset=utf-8');
@@ -2110,6 +2227,7 @@ try {
         'mises' => 'route_mises',
         'paris' => 'route_creer_pari',
         'profil' => 'route_profil',
+        'bonus' => 'route_bonus',
         'commentaires' => 'route_commentaire',
         'admin/connexion' => 'route_admin_connexion',
         'admin/deconnexion' => 'route_admin_deconnexion',

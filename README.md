@@ -74,6 +74,20 @@ points, mini-courbe sur 30 jours), paris qui ferment bientôt, derniers résulta
   série en cours, meilleur pari, plus grosse perte, trophées, dernières mises (estimations en cours
   jamais dévoilées). Elle figure aussi dans « Mon profil ».
 
+## Bonus et minuteurs
+
+- **Bonus quotidien** (bouton 🎁 en haut de la page et encart de l'accueil) : 100 deniers publics par défaut,
+  récupérables toutes les 24 heures glissantes ; ensuite, un compte à rebours indique le prochain, et la
+  série de jours consécutifs est affichée (🔥).
+- **Bonus de la question du jour** : 50 deniers publics par défaut, offerts à la première mise du jour sur la
+  question du jour, quelle que soit la réponse ; une fois par jour et par joueur (pas de cumul en misant sur
+  chaque pari qui devient tour à tour la question du jour), jamais pour une mise saisie par l'administration.
+- Montants réglables dans Admin → Réglages (0 = désactivé). Les bonus sont annoncés dans le fil et comptent
+  dans les courbes et fiches des joueurs.
+- **Minuteur** sur chaque question qui a une date limite (cartes, tuiles de l'accueil, question du jour) :
+  « ⏳ 2 j 14 h », orange à moins de 24 h, rouge à moins d'une heure, date exacte au survol. Dans
+  « Ordre des questions », les paris sans date limite sont signalés.
+
 ## Joueurs
 
 - **Inscription** (bouton « Créer un compte ») : pseudo, code secret, code d'invitation s'il est défini, et
