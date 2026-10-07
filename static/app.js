@@ -589,9 +589,11 @@ function blocPariDuJour() {
 
 function vueAccueil() {
   const d = etat.direct;
+  // Ordre choisi par l'administration (celui de etat.paris), paris flash ouverts en tête
+  const rang = Object.fromEntries(etat.paris.map((p, k) => [p.id, k]));
   const tendances = [...etat.tendances].filter((t) => t.pari_id !== etat.pari_du_jour?.id).sort((a, b) => {
-    const pa = etat.paris.find((x) => x.id === a.pari_id), pb = etat.paris.find((x) => x.id === b.pari_id);
-    return (pb.flash && pb.accepte_mises) - (pa.flash && pa.accepte_mises) || b.volume_24h - a.volume_24h || pb.total_mise - pa.total_mise;
+    const pa = etat.paris[rang[a.pari_id]], pb = etat.paris[rang[b.pari_id]];
+    return (pb.flash && pb.accepte_mises) - (pa.flash && pa.accepte_mises) || rang[a.pari_id] - rang[b.pari_id];
   });
   const maintenant = new Date(etat.maintenant);
   const ouverts = etat.paris.filter((p) => p.accepte_mises);
@@ -984,7 +986,35 @@ function vueAdminParis() {
       ${etat.depeches.length ? `<ul class="liste-simple">${etat.depeches.slice(0, 5).map((x) => `<li><span>${fmtDate(x.date)} · ${esc(x.texte)}</span>
         <button class="lien" data-action="admin-depeche-suppression" data-depeche="${x.id}">supprimer</button></li>`).join("")}</ul>` : ""}
     </div>`;
-  return flash + depeches + barre + (cartes.join("") || `<p class="vide">Aucun pari en cours.</p>`)
+  const pdj = etat.pari_du_jour;
+  const ouverts = actifs.filter((p) => p.accepte_mises);
+  const ordre = `
+    <div class="carte ordre-questions">
+      <h2>⭐ Question du jour</h2>
+      <div class="actions">
+        <select data-k="pdj-choix">
+          <option value="">Automatique : le pari le plus animé des dernières 24 h</option>
+          ${ouverts.map((p) => `<option value="${p.id}"${pdj?.choisi && pdj.id === p.id ? " selected" : ""}>${esc(p.titre)}</option>`).join("")}
+        </select>
+        <button data-action="admin-pdj-choix">Enregistrer</button>
+      </div>
+      <p class="aide">Actuellement : ${pdj ? `« ${esc(etat.paris.find((p) => p.id === pdj.id)?.titre ?? "")} »
+        ${pdj.choisi ? "(votre choix, valable jusqu'à ce que vous en changiez ou que le pari ferme)" : "(choix automatique)"}` : "aucun pari ouvert"}.</p>
+      <h2>🗂 Ordre des questions</h2>
+      <p class="aide">Ordre d'affichage dans « Paris en cours » et dans les tendances de l'accueil (les paris flash ouverts
+        restent toujours en tête). Les nouveaux paris arrivent en fin de liste.</p>
+      ${actifs.length ? `<ol class="liste-ordre">${actifs.map((p, k) => `
+        <li data-pari="${p.id}">
+          <span class="ordre-titre">${p.flash ? "⚡ " : ""}${esc(p.titre)}${p.statut === "suspendu" ? ` <span class="badge suspendu">suspendu</span>` : ""}</span>
+          <span class="ordre-boutons">
+            <button class="secondaire" data-action="admin-deplacer" data-sens="haut" title="Tout en haut" ${k === 0 ? "disabled" : ""}>⤒</button>
+            <button class="secondaire" data-action="admin-deplacer" data-sens="monter" title="Monter" ${k === 0 ? "disabled" : ""}>↑</button>
+            <button class="secondaire" data-action="admin-deplacer" data-sens="descendre" title="Descendre" ${k === actifs.length - 1 ? "disabled" : ""}>↓</button>
+            <button class="secondaire" data-action="admin-deplacer" data-sens="bas" title="Tout en bas" ${k === actifs.length - 1 ? "disabled" : ""}>⤓</button>
+          </span>
+        </li>`).join("")}</ol>` : `<p class="aide">Aucun pari en cours.</p>`}
+    </div>`;
+  return ordre + flash + depeches + barre + (cartes.join("") || `<p class="vide">Aucun pari en cours.</p>`)
     + (cartesClos.length ? `<h2 class="titre-section">Paris clôturés</h2>${cartesClos.join("")}` : "");
 }
 
@@ -1661,9 +1691,18 @@ document.addEventListener("click", async (ev) => {
       if (!confirm("Supprimer cette dépêche ?")) return;
       await action(api(`admin/depeches/${bouton.dataset.depeche}/suppression`, { method: "POST" }), "Dépêche supprimée.");
       break;
+    case "admin-deplacer":
+      await action(api(`admin/paris/${pariId}/deplacer`, { body: { sens: bouton.dataset.sens } }));
+      break;
+    case "admin-pdj-choix": {
+      const choix = champ("pdj-choix").value;
+      await action(api("admin/pari-du-jour", { body: { pari_id: choix } }),
+        choix ? "Question du jour enregistrée, en tête de l'accueil." : "Question du jour : choix automatique.");
+      break;
+    }
     case "admin-pdj":
       await action(api("admin/pari-du-jour", { body: { pari_id: bouton.dataset.pdj } }),
-        bouton.dataset.pdj ? "C'est le pari du jour, en tête de l'accueil." : "Pari du jour : choix automatique.");
+        bouton.dataset.pdj ? "C'est la question du jour, en tête de l'accueil." : "Question du jour : choix automatique.");
       break;
     case "admin-tout-suspendre":
       if (!confirm("Suspendre immédiatement les mises de tous les paris ouverts ?")) return;

@@ -31,6 +31,7 @@ button {
 button:hover { filter: brightness(1.2); }
 button:disabled { background: #bbb; cursor: not-allowed; filter: none; }
 button.secondaire { background: #fff; color: var(--bleu); border: 1px solid var(--bleu); }
+button.secondaire:disabled { background: #fff; color: #bbb; border-color: #ddd; }
 button.danger { background: var(--rouge); }
 button.lien { background: none; color: var(--bleu); padding: 0; text-decoration: underline; }
 input, select, textarea {
@@ -428,6 +429,19 @@ dialog.fiche::backdrop { background: rgba(0, 0, 40, .45); }
 .fiche-paris a:hover { color: var(--bleu); text-decoration: underline; }
 .fiche-paris b { font-size: 1.1rem; }
 dialog.fiche h3, .fiche-profil h3 { font-size: .95rem; margin: 1rem 0 .3rem; }
+
+/* Administration : question du jour et ordre des questions ------------------ */
+.ordre-questions { margin-bottom: 1rem; border-color: #fcd34d; }
+.ordre-questions h2 + .actions select { flex: 1 1 20rem; min-width: 0; }
+.ordre-questions h2:not(:first-child) { margin-top: 1.2rem; }
+.liste-ordre { margin: .4rem 0 0; padding-left: 1.6rem; }
+.liste-ordre li { padding: .3rem 0; border-bottom: 1px solid #f0f0f0; }
+.liste-ordre li { display: list-item; }
+.liste-ordre li > span { display: inline-flex; vertical-align: middle; }
+.liste-ordre .ordre-titre { width: calc(100% - 10.5rem); min-width: 8rem; gap: .4rem; align-items: center; }
+.liste-ordre .ordre-boutons { gap: .25rem; float: right; }
+.liste-ordre .ordre-boutons button { padding: .15rem .5rem; line-height: 1.2; }
+.liste-ordre li::after { content: ""; display: block; clear: both; }
 
 .toast {
   position: fixed; bottom: 1.2rem; left: 50%; transform: translateX(-50%);

@@ -64,8 +64,12 @@ points, mini-courbe sur 30 jours), paris qui ferment bientôt, derniers résulta
   la dernière dépêche si le marché a bougé depuis (sinon sur 24 h), et les mouvements de 10 points ou plus
   sont annoncés automatiquement (« 📈 49.3 sur le PLF ? : « Oui » vient de prendre 14 pts depuis
   « Réunion à Matignon » »). Sans dépêche, seuls les mouvements de 15 points sur 24 h le sont.
-- **Pari du jour** : choisi par l'administration pour la journée (bouton « ⭐ En faire le pari du jour »),
-  sinon le pari ouvert le plus animé des dernières 24 heures.
+- **Question du jour** : choisie par l'administration (Admin → Paris → « Question du jour », ou bouton
+  « ⭐ En faire le pari du jour » sur un pari) ; le choix reste valable jusqu'à ce qu'elle en change ou que le
+  pari ferme. Sinon : le pari ouvert le plus animé des dernières 24 heures.
+- **Ordre des questions** (Admin → Paris → « Ordre des questions », flèches ⤒ ↑ ↓ ⤓) : ordre d'affichage de
+  « Paris en cours » et des tendances de l'accueil ; les paris flash ouverts restent en tête, les nouveaux
+  paris arrivent en fin de liste.
 - **Fiche joueur** (clic sur un pseudo) : rang, variation du total sur 24 h et 7 jours, % de paris gagnés,
   série en cours, meilleur pari, plus grosse perte, trophées, dernières mises (estimations en cours
   jamais dévoilées). Elle figure aussi dans « Mon profil ».

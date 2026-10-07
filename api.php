@@ -42,7 +42,7 @@ const PARIS_V2 = [
      "Déficit public prévu par la loi de finances initiale promulguée.", ['Oui', 'Non']],
 ];
 
-const VERSION_BASE = 8;
+const VERSION_BASE = 9;
 const PROPOSITIONS_PAR_JOUR = 5;
 const DUREES_FLASH = [2, 5, 10, 15, 30, 60]; // minutes
 const COMMENTAIRE_MAX = 280; // caractères
@@ -338,6 +338,15 @@ function migrer(PDO $pdo, int $version): void
             : 'CREATE TABLE IF NOT EXISTS depeches (id INT AUTO_INCREMENT PRIMARY KEY, texte VARCHAR(200) NOT NULL,
                    cree_le CHAR(19) NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci');
     }
+    if ($version < 9) { // ordre d'affichage des paris, réglable par l'administration
+        $pdo->exec('ALTER TABLE paris ADD COLUMN position INTEGER');
+        $pdo->exec('UPDATE paris SET position = id');
+        // les paris en cours gardent l'ordre dans lequel ils s'affichaient jusqu'ici
+        $ids = $pdo->query("SELECT id FROM paris WHERE statut IN ('ouvert', 'suspendu')
+                            ORDER BY date_limite IS NULL, date_limite, id")->fetchAll(PDO::FETCH_COLUMN);
+        $maj = $pdo->prepare('UPDATE paris SET position = ? WHERE id = ?');
+        foreach ($ids as $n => $id) $maj->execute([$n + 1, $id]);
+    }
     $pdo->exec("DELETE FROM reglages WHERE cle IN ('version', 'revision')");
     $pdo->prepare("INSERT INTO reglages (cle, valeur) VALUES ('version', ?)")->execute([(string)VERSION_BASE]);
     // Révision des données : incrémentée à chaque écriture, elle évite de renvoyer un état inchangé.
@@ -351,6 +360,10 @@ function inserer_pari(PDO $pdo, string $categorie, string $titre, string $descri
         ->execute([$titre, $description, $categorie, $dateLimite, maintenant()]);
     $pariId = (int)$pdo->lastInsertId();
     if ($auteurId) $pdo->prepare('UPDATE paris SET auteur_id = ? WHERE id = ?')->execute([$auteurId, $pariId]);
+    if (version_base($pdo) >= 9) { // nouveau pari : en fin de liste
+        $pdo->prepare('UPDATE paris SET position = (SELECT p FROM (SELECT COALESCE(MAX(position), 0) + 1 AS p FROM paris) t) WHERE id = ?')
+            ->execute([$pariId]);
+    }
     foreach (array_values($issues) as $n => $libelle) {
         // probabilite : colonne héritée des cotes fixes, inutilisée en pari mutuel
         $pdo->prepare('INSERT INTO issues (pari_id, libelle, probabilite, ordre) VALUES (?, ?, 0, ?)')
@@ -833,9 +846,9 @@ function route_etat(): array
                (SELECT COUNT(DISTINCT joueur_id) FROM mises WHERE pari_id = p.id AND tardive = 0) AS nb_joueurs,
                (SELECT COUNT(*) FROM mises WHERE pari_id = p.id AND tardive = 1) AS nb_tardives
         FROM paris p LEFT JOIN joueurs j ON j.id = p.auteur_id
-        ORDER BY CASE p.statut WHEN 'ouvert' THEN 0 WHEN 'suspendu' THEN 1 ELSE 2 END,
-                 CASE WHEN p.statut IN ('clos', 'annule') THEN p.clos_le END DESC,
-                 p.date_limite IS NULL, p.date_limite, p.id") as $p) {
+        ORDER BY CASE WHEN p.statut IN ('ouvert', 'suspendu') THEN 0 ELSE 1 END,
+                 CASE WHEN p.statut IN ('ouvert', 'suspendu') THEN p.position END,
+                 CASE WHEN p.statut IN ('clos', 'annule') THEN p.clos_le END DESC, p.id") as $p) {
         $issues = $issuesParPari[$p['id']] ?? [];
         $estimation = $p['type'] === 'estimation';
         foreach ($issues as &$i) {
@@ -1007,15 +1020,15 @@ function tendances(array $paris): array
 }
 
 /**
- * Pari du jour : celui choisi aujourd'hui par l'administration s'il accepte encore les mises, sinon le
- * plus animé des dernières 24 heures (puis la plus grosse cagnotte).
+ * Pari du jour : celui choisi par l'administration (jusqu'à ce qu'elle en change), tant qu'il accepte les
+ * mises ; sinon le plus animé des dernières 24 heures (puis la plus grosse cagnotte).
  */
 function pari_du_jour(array $paris, array $tendances): ?array
 {
     $ouverts = array_values(array_filter($paris, fn($p) => $p['accepte_mises']));
     if (!$ouverts) return null;
     $choix = json_decode(reglage_texte('pari_du_jour') ?: 'null', true);
-    if ($choix && $choix['date'] === date('Y-m-d')) {
+    if ($choix) {
         foreach ($ouverts as $p) if ($p['id'] === (int)$choix['id']) return ['id' => $p['id'], 'choisi' => true];
     }
     $volumes = array_column($tendances, 'volume_24h', 'pari_id');
@@ -1159,7 +1172,7 @@ function route_admin_depeche_suppression(int $id): array
     });
 }
 
-/** Choisit le pari du jour (pour aujourd'hui) ; vide : choix automatique. */
+/** Choisit le pari du jour (jusqu'à nouvel ordre) ; vide : choix automatique. */
 function route_admin_pari_du_jour(): array
 {
     $id = donnees()['pari_id'] ?? '';
@@ -1168,9 +1181,32 @@ function route_admin_pari_du_jour(): array
         if ($id !== '' && $id !== null) {
             $pari = lire_pari(entier($id, 'Pari invalide.'));
             if (!accepte_les_mises($pari)) throw new ErreurApi("Ce pari n'accepte pas de mises : il ne peut pas être le pari du jour.", 409);
-            q("INSERT INTO reglages (cle, valeur) VALUES ('pari_du_jour', ?)", [json_encode(['id' => (int)$pari['id'], 'date' => date('Y-m-d')])]);
+            q("INSERT INTO reglages (cle, valeur) VALUES ('pari_du_jour', ?)", [json_encode(['id' => (int)$pari['id'], 'depuis' => maintenant()])]);
         }
         return ['ok' => true];
+    });
+}
+
+/**
+ * Change la place d'un pari en cours dans l'ordre d'affichage (onglet « Paris en cours », tuiles de
+ * l'accueil) : sens = haut (tout en haut), monter, descendre, bas (tout en bas).
+ */
+function route_admin_deplacer(int $pariId): array
+{
+    $sens = donnees()['sens'] ?? '';
+    if (!in_array($sens, ['haut', 'monter', 'descendre', 'bas'], true)) throw new ErreurApi('Sens invalide.');
+    return transaction(function () use ($pariId, $sens) {
+        lire_pari_actif($pariId);
+        $ids = array_map('intval', q("SELECT id FROM paris WHERE statut IN ('ouvert', 'suspendu') ORDER BY position, id")
+            ->fetchAll(PDO::FETCH_COLUMN));
+        $k = array_search($pariId, $ids, true);
+        array_splice($ids, $k, 1);
+        $cible = match ($sens) {
+            'haut' => 0, 'bas' => count($ids), 'monter' => max(0, $k - 1), 'descendre' => min(count($ids), $k + 1),
+        };
+        array_splice($ids, $cible, 0, [$pariId]);
+        foreach ($ids as $n => $id) q('UPDATE paris SET position = ? WHERE id = ?', [$n + 1, $id]);
+        return ['ok' => true, 'position' => $cible + 1];
     });
 }
 
@@ -2093,7 +2129,7 @@ try {
     $routesAdmin = [
         'paris' => ['maj' => 'route_admin_modifier', 'statut' => 'route_admin_statut', 'cloture' => 'route_admin_cloture',
                     'annulation' => 'route_admin_annulation', 'reouverture' => 'route_admin_reouverture',
-                    'cotes' => 'route_admin_cotes',
+                    'cotes' => 'route_admin_cotes', 'deplacer' => 'route_admin_deplacer',
                     'suppression' => 'route_admin_suppression'],
         'joueurs' => ['maj' => 'route_admin_joueur_maj', 'ajustement' => 'route_admin_ajustement',
                       'suppression' => 'route_admin_joueur_suppression'],
