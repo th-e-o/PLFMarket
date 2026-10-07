@@ -42,7 +42,7 @@ const PARIS_V2 = [
      "Déficit public prévu par la loi de finances initiale promulguée.", ['Oui', 'Non']],
 ];
 
-const VERSION_BASE = 3;
+const VERSION_BASE = 4;
 const PROPOSITIONS_PAR_JOUR = 5;
 
 const SCHEMA_SQLITE = <<<SQL
@@ -234,6 +234,9 @@ function migrer(PDO $pdo, int $version): void
                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci');
         $pdo->exec('ALTER TABLE mises ADD COLUMN par_admin INTEGER NOT NULL DEFAULT 0');
     }
+    if ($version < 4) { // cotes ajustées par l'administration
+        $pdo->exec('ALTER TABLE issues ADD COLUMN poids_banque REAL');
+    }
     $pdo->exec("DELETE FROM reglages WHERE cle = 'version'");
     $pdo->prepare("INSERT INTO reglages (cle, valeur) VALUES ('version', ?)")->execute([(string)VERSION_BASE]);
 }
@@ -290,23 +293,24 @@ function maintenant(): string
 // ---------------------------------------------------------------------------
 
 /**
- * Pari mutuel amorcé : la « banque » mise fictivement amorce() clochettes sur chaque issue, pour que les
- * cotes soient attrayantes dès l'ouverture (×2 sur un Oui/Non) et stables tant qu'il y a peu de mises.
- * Cote d'une issue = (masse misée + amorces) / (masse misée sur l'issue + amorce) ; null sans amorce
- * tant que personne n'y a misé. À la clôture, les gagnants sont payés à cette cote ; la part de la
- * banque n'est versée à personne. Elle crée des clochettes quand les joueurs gagnent, en détruit sinon.
+ * Pari mutuel amorcé : la « banque » apporte amorce() clochettes fictives par issue à la cagnotte, et
+ * détient sur chaque issue une part fictive (amorce × poids, poids 1 par défaut). Les cotes sont ainsi
+ * attrayantes dès l'ouverture (×2 sur un Oui/Non) et stables tant qu'il y a peu de mises.
+ * Cote d'une issue = (masse misée + apport de la banque) / (masse misée sur l'issue + part de la banque) ;
+ * null tant que le dénominateur est nul. L'administration fixe une cote en ajustant le poids de l'issue.
+ * À la clôture, les gagnants sont payés à cette cote ; la banque ne touche rien. Elle crée des
+ * clochettes quand les joueurs gagnent, en détruit sinon.
  */
-function cote(int $masse, int $masseIssue, int $nbIssues): ?float
+function cote(int $masse, int $masseIssue, int $nbIssues, ?float $poids = null): ?float
 {
-    $a = amorce();
-    return $masseIssue + $a > 0 ? ($masse + $nbIssues * $a) / ($masseIssue + $a) : null;
+    $part = $masseIssue + amorce() * ($poids ?? 1);
+    return $part > 0 ? ($masse + $nbIssues * amorce()) / $part : null;
 }
 
 /** Clochettes à partager entre les mises sur l'issue réalisée (masse de l'issue × cote). */
-function a_verser(int $masse, int $masseIssue, int $nbIssues): int
+function a_verser(int $masse, int $masseIssue, int $nbIssues, ?float $poids = null): int
 {
-    $a = amorce();
-    return intdiv($masseIssue * ($masse + $nbIssues * $a), $masseIssue + $a);
+    return $masseIssue > 0 ? (int)floor($masseIssue * cote($masse, $masseIssue, $nbIssues, $poids) + 1e-9) : 0;
 }
 
 /**
@@ -448,23 +452,26 @@ function route_etat(): array
     session_write_close(); // libère la session : les rafraîchissements ne se bloquent pas entre eux
     $joueurs = classement();
 
-    $issuesParPari = $masseIssue = $massePari = [];
+    $issuesParPari = $masseIssue = $massePari = $poids = [];
     foreach (q('
-        SELECT i.id, i.pari_id, i.libelle,
+        SELECT i.id, i.pari_id, i.libelle, i.poids_banque,
                (SELECT COALESCE(SUM(montant), 0) FROM mises WHERE issue_id = i.id) AS total_mise,
                (SELECT COUNT(DISTINCT joueur_id) FROM mises WHERE issue_id = i.id) AS nb_joueurs
         FROM issues i ORDER BY i.pari_id, i.ordre, i.id') as $i) {
         $masseIssue[$i['id']] = (int)$i['total_mise'];
+        $poids[$i['id']] = $i['poids_banque'] === null ? null : (float)$i['poids_banque'];
         $massePari[$i['pari_id']] = ($massePari[$i['pari_id']] ?? 0) + (int)$i['total_mise'];
         $issuesParPari[$i['pari_id']][] = [
             'id' => (int)$i['id'],
             'libelle' => $i['libelle'],
             'total_mise' => (int)$i['total_mise'],
             'nb_joueurs' => (int)$i['nb_joueurs'],
+            'part_banque' => amorce() * ($poids[$i['id']] ?? 1), // pour estimer les gains côté navigateur
+            'cote_ajustee' => $poids[$i['id']] !== null,
         ];
     }
     foreach ($issuesParPari as $pariId => &$issues) {
-        foreach ($issues as &$i) $i['cote'] = cote($massePari[$pariId], $i['total_mise'], count($issues));
+        foreach ($issues as &$i) $i['cote'] = cote($massePari[$pariId], $i['total_mise'], count($issues), $poids[$i['id']]);
         unset($i);
     }
     unset($issues);
@@ -504,13 +511,14 @@ function route_etat(): array
             WHERE m.joueur_id = ? ORDER BY m.cree_le DESC, m.id DESC', [$moi['id']]) as $m) {
             $montant = (int)$m['montant'];
             $enCours = $m['gain'] === null;
-            [$masse, $masseI, $n] = [$massePari[$m['pari_id']], $masseIssue[$m['issue_id']], count($issuesParPari[$m['pari_id']])];
+            [$masse, $masseI, $n, $w] = [$massePari[$m['pari_id']], $masseIssue[$m['issue_id']],
+                                         count($issuesParPari[$m['pari_id']]), $poids[$m['issue_id']]];
             $mesMises[] = [
                 'id' => (int)$m['id'], 'pari_id' => (int)$m['pari_id'], 'issue_id' => (int)$m['issue_id'],
                 'montant' => $montant,
                 // en cours : cote actuelle de l'issue ; terminé : cote effectivement obtenue
-                'cote' => $enCours ? cote($masse, $masseI, $n) : (int)$m['gain'] / $montant,
-                'gain_estime' => $enCours ? intdiv($montant * a_verser($masse, $masseI, $n), $masseI) : null,
+                'cote' => $enCours ? cote($masse, $masseI, $n, $w) : (int)$m['gain'] / $montant,
+                'gain_estime' => $enCours ? intdiv($montant * a_verser($masse, $masseI, $n, $w), $masseI) : null,
                 'gain' => $enCours ? null : (int)$m['gain'], 'cree_le' => $m['cree_le'],
                 'pari_titre' => $m['pari_titre'], 'statut_pari' => $m['statut_pari'],
                 'issue_libelle' => $m['issue_libelle'],
@@ -724,11 +732,12 @@ function miser(int $joueurId, array $d, bool $parAdmin): array
         $masse = $montant + (int)q('SELECT COALESCE(SUM(montant), 0) FROM mises WHERE pari_id = ?', [$pari['id']])->fetchColumn();
         $masseIssue = $montant + (int)q('SELECT COALESCE(SUM(montant), 0) FROM mises WHERE issue_id = ?', [$issueId])->fetchColumn();
         $n = (int)q('SELECT COUNT(*) FROM issues WHERE pari_id = ?', [$pari['id']])->fetchColumn();
-        $cote = cote($masse, $masseIssue, $n);
+        $w = $issue['poids_banque'] === null ? null : (float)$issue['poids_banque'];
+        $cote = cote($masse, $masseIssue, $n, $w);
         // cote_c : cote au moment de la mise, à titre indicatif (le gain se calcule à la clôture)
         q('INSERT INTO mises (joueur_id, pari_id, issue_id, montant, cote_c, cree_le, par_admin) VALUES (?, ?, ?, ?, ?, ?, ?)',
           [$joueurId, $pari['id'], $issueId, $montant, (int)floor($cote * 100), maintenant(), (int)$parAdmin]);
-        return ['ok' => true, 'cote' => $cote, 'gain_estime' => intdiv($montant * a_verser($masse, $masseIssue, $n), $masseIssue)];
+        return ['ok' => true, 'cote' => $cote, 'gain_estime' => intdiv($montant * a_verser($masse, $masseIssue, $n, $w), $masseIssue)];
     });
 }
 
@@ -829,7 +838,9 @@ function route_admin_cloture(int $pariId): array
         }
         $n = (int)q('SELECT COUNT(*) FROM issues WHERE pari_id = ?', [$pariId])->fetchColumn();
         $masse = array_sum(array_column($mises, 'montant'));
-        $gains = $gagnantes ? repartir(a_verser($masse, array_sum($gagnantes), $n), $gagnantes) : [];
+        $poids = q('SELECT poids_banque FROM issues WHERE id = ?', [$issueId])->fetchColumn();
+        $poids = $poids === null ? null : (float)$poids;
+        $gains = $gagnantes ? repartir(a_verser($masse, array_sum($gagnantes), $n, $poids), $gagnantes) : [];
         foreach ($mises as $m) {
             $g = !$gagnantes && amorce() === 0 ? (int)$m['montant'] : ($gains[(int)$m['id']] ?? 0);
             q('UPDATE mises SET gain = ? WHERE id = ?', [$g, $m['id']]);
@@ -847,6 +858,42 @@ function route_admin_annulation(int $pariId): array
         lire_pari_actif($pariId);
         q('UPDATE mises SET gain = montant WHERE pari_id = ?', [$pariId]);
         q("UPDATE paris SET statut = 'annule', clos_le = ? WHERE id = ?", [maintenant(), $pariId]);
+        return ['ok' => true];
+    });
+}
+
+/**
+ * Fixe la cote actuelle de certaines issues ({id: cote}, « 1,8 » accepté) ; une valeur vide rétablit
+ * la part par défaut de la banque. Les mises suivantes font ensuite évoluer la cote normalement.
+ */
+function route_admin_cotes(int $pariId): array
+{
+    $cotes = (array)(donnees()['cotes'] ?? []);
+    return transaction(function () use ($pariId, $cotes) {
+        lire_pari_actif($pariId);
+        $issues = q('SELECT i.id, i.libelle, (SELECT COALESCE(SUM(montant), 0) FROM mises WHERE issue_id = i.id) AS masse
+                     FROM issues i WHERE i.pari_id = ?', [$pariId])->fetchAll();
+        $masse = array_sum(array_column($issues, 'masse'));
+        $apport = $masse + count($issues) * amorce(); // numérateur commun des cotes
+        foreach ($issues as $i) {
+            if (!array_key_exists($i['id'], $cotes)) continue;
+            $saisie = str_replace([',', '×', 'x', ' '], ['.', '', '', ''], trim((string)$cotes[$i['id']]));
+            if ($saisie === '') {
+                q('UPDATE issues SET poids_banque = NULL WHERE id = ?', [$i['id']]);
+                continue;
+            }
+            if (amorce() === 0) throw new ErreurApi("Avec une amorce nulle, les cotes ne dépendent que des mises : réglez d'abord une amorce.", 409);
+            if (!is_numeric($saisie) || $saisie < 1.01 || $saisie > 1000) {
+                throw new ErreurApi("Cote invalide pour « {$i['libelle']} » : entre 1,01 et 1 000.");
+            }
+            // cote = apport / (masse de l'issue + amorce × poids)  ⇒  poids = (apport / cote − masse de l'issue) / amorce
+            $poids = ($apport / (float)$saisie - (int)$i['masse']) / amorce();
+            if ($poids < 0) {
+                $max = number_format($apport / (int)$i['masse'], 2, ',', ' ');
+                throw new ErreurApi("Avec les mises déjà faites, la cote de « {$i['libelle']} » ne peut pas dépasser ×$max.", 409);
+            }
+            q('UPDATE issues SET poids_banque = ? WHERE id = ?', [$poids, $i['id']]);
+        }
         return ['ok' => true];
     });
 }
@@ -1009,6 +1056,7 @@ try {
     $routesAdmin = [
         'paris' => ['maj' => 'route_admin_modifier', 'statut' => 'route_admin_statut', 'cloture' => 'route_admin_cloture',
                     'annulation' => 'route_admin_annulation', 'reouverture' => 'route_admin_reouverture',
+                    'cotes' => 'route_admin_cotes',
                     'suppression' => 'route_admin_suppression'],
         'joueurs' => ['maj' => 'route_admin_joueur_maj', 'ajustement' => 'route_admin_ajustement',
                       'suppression' => 'route_admin_joueur_suppression'],

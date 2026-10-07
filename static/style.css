@@ -202,6 +202,7 @@ legend { font-size: .88rem; font-weight: 600; }
 .admin-joueur .actions { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
 .admin-joueur ul { margin: .6rem 0 0; }
 input.petit { width: 7rem; }
+.cote-saisie { width: 5.5rem; text-align: right; }
 
 .toast {
   position: fixed; bottom: 1.2rem; left: 50%; transform: translateX(-50%);

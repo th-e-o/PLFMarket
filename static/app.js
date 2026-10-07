@@ -9,8 +9,8 @@ const nb = (n) => Math.round(n).toLocaleString("fr-FR");
 const pct = (x) => (Math.round(x * 1000) / 10).toLocaleString("fr-FR");
 const fmtCote = (c) => c == null ? "—" : "×" + c.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 // Gain estimé d'une nouvelle mise si plus personne ne mise ensuite (cote amorcée par la banque, cf. api.php).
-const gainEstime = (montant, masse, masseIssue, nbIssues) =>
-  Math.floor(montant * (masse + montant + nbIssues * etat.amorce) / (masseIssue + montant + etat.amorce));
+const gainEstime = (montant, masse, masseIssue, nbIssues, partBanque) =>
+  Math.floor(montant * (masse + montant + nbIssues * etat.amorce) / (masseIssue + montant + partBanque));
 const fmtDate = (s) => s ? new Date(s).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
 const pluriel = (n, mot) => `${n} ${mot}${n > 1 ? "s" : ""}`;
 
@@ -263,7 +263,7 @@ function ligneIssue(p, i) {
       <div class="cote" title="${i.cote == null ? "Personne n'a encore misé sur cette issue" : "Cote actuelle : elle évolue à chaque mise"}">${fmtCote(i.cote)}</div>
       ${peutMiser ? `
         <form class="miser" data-issue="${i.id}">
-          <input type="number" min="1" step="1" max="${etat.moi.disponible}" placeholder="Mise" data-k="m-${i.id}" data-masse="${p.total_mise}" data-masse-issue="${i.total_mise}" data-nb-issues="${p.issues.length}">
+          <input type="number" min="1" step="1" max="${etat.moi.disponible}" placeholder="Mise" data-k="m-${i.id}" data-masse="${p.total_mise}" data-masse-issue="${i.total_mise}" data-nb-issues="${p.issues.length}" data-part="${i.part_banque}">
           <button type="submit" ${etat.moi.disponible < 1 ? "disabled" : ""}>Parier</button>
           <span class="gain" data-gain="${i.id}"></span>
         </form>` : ""}
@@ -275,7 +275,7 @@ function majGainsPotentiels() {
     const montant = parseInt(input.value, 10);
     const cible = $(`[data-gain="${input.dataset.k.slice(2)}"]`);
     if (cible) cible.textContent = montant > 0
-      ? `→ gain estimé : ${nb(gainEstime(montant, +input.dataset.masse, +input.dataset.masseIssue, +input.dataset.nbIssues))} 🔔 (si personne ne mise après vous)`
+      ? `→ gain estimé : ${nb(gainEstime(montant, +input.dataset.masse, +input.dataset.masseIssue, +input.dataset.nbIssues, +input.dataset.part))} 🔔 (si personne ne mise après vous)`
       : "";
   });
 }
@@ -376,14 +376,19 @@ function vueAdminParis() {
       <h3>${esc(p.titre)}</h3>
       ${p.auteur ? `<p class="auteur">Proposé par ${esc(p.auteur)}</p>` : ""}
       <div class="tableau-conteneur"><table>
-        <thead><tr><th>Issue</th><th class="nombre">Cote</th><th class="nombre">Misé</th><th class="nombre">Joueurs</th></tr></thead>
+        <thead><tr><th>Issue</th><th class="nombre">Cote</th><th class="nombre">Misé</th><th class="nombre">Joueurs</th><th class="nombre">Nouvelle cote</th></tr></thead>
         <tbody>${p.issues.map((i) => `<tr>
           <td>${esc(i.libelle)}</td>
-          <td class="nombre">${fmtCote(i.cote)}</td>
+          <td class="nombre">${fmtCote(i.cote)}${i.cote_ajustee ? ` <small class="aide" title="Cote fixée par l'administration">✎</small>` : ""}</td>
           <td class="nombre">${nb(i.total_mise)}</td>
           <td class="nombre">${i.nb_joueurs}</td>
+          <td class="nombre"><input class="cote-saisie" inputmode="decimal" data-k="c-${i.id}" data-cote-issue="${i.id}" placeholder="ex. 1,8"></td>
         </tr>`).join("")}</tbody>
       </table></div>
+      <div class="actions">
+        <button class="secondaire" data-action="admin-cotes">Appliquer les nouvelles cotes</button>
+        ${p.issues.some((i) => i.cote_ajustee) ? `<button class="lien" data-action="admin-cotes-defaut">Revenir aux cotes calculées</button>` : ""}
+      </div>
       ${listeMisesAdmin(p)}
       ${editionPari(p, true)}
       <div class="actions">
@@ -551,6 +556,18 @@ document.addEventListener("click", async (ev) => {
         const nouvelle = champ(`${k}-nouvelle`, carte);
         if (nouvelle) nouvelle.value = "";
       }
+      break;
+    }
+    case "admin-cotes": {
+      const champs = $$("[data-cote-issue]", carte).filter((c) => c.value.trim() !== "");
+      if (!champs.length) return toast("Saisissez au moins une nouvelle cote.", "erreur");
+      const cotes = Object.fromEntries(champs.map((c) => [c.dataset.coteIssue, c.value]));
+      if (await action(api(`admin/paris/${pariId}/cotes`, { body: { cotes } }), "Cotes mises à jour.")) champs.forEach((c) => (c.value = ""));
+      break;
+    }
+    case "admin-cotes-defaut": {
+      const cotes = Object.fromEntries($$("[data-cote-issue]", carte).map((c) => [c.dataset.coteIssue, ""]));
+      await action(api(`admin/paris/${pariId}/cotes`, { body: { cotes } }), "Cotes recalculées à partir des mises.");
       break;
     }
     case "admin-miser": {
