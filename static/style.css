@@ -98,7 +98,7 @@ input, select, textarea {
   display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 1.5rem;
   padding: 1.5rem clamp(1rem, 3vw, 2rem); max-width: 1400px; margin: 0 auto;
 }
-@media (max-width: 900px) { .grille { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .grille { grid-template-columns: minmax(0, 1fr); } }
 .lateral { display: flex; flex-direction: column; gap: 1rem; }
 @media (min-width: 901px) { .lateral { position: sticky; top: 3.4rem; align-self: start; max-height: calc(100vh - 4.4rem); overflow-y: auto; } }
 
@@ -121,7 +121,7 @@ input, select, textarea {
 .onglets .compteur { background: var(--bleu-clair); color: var(--bleu); border-radius: 1rem; padding: 0 .45rem; font-size: .8rem; margin-left: .3rem; }
 
 /* Cartes de pari ---------------------------------------------------------- */
-.liste-paris { display: grid; gap: 1rem; }
+.liste-paris { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; }
 .pari { position: relative; }
 .pari-entete { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin-bottom: .35rem; }
 .pari h3 { font-size: 1.05rem; margin-bottom: .2rem; }
@@ -203,6 +203,82 @@ legend { font-size: .88rem; font-weight: 600; }
 .admin-joueur ul { margin: .6rem 0 0; }
 input.petit { width: 7rem; }
 .cote-saisie { width: 5.5rem; text-align: right; }
+
+/* Nouveautés : lien direct, estimations, classement par équipe -------------- */
+.lien-pari { font-size: .8rem; }
+.pari.surligne { box-shadow: 0 0 0 3px var(--bleu); transition: box-shadow .3s; }
+.pari { scroll-margin-top: 3.6rem; }
+button.badge.etape { flex: none; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; border: 0; font: inherit; font-size: .72rem; font-weight: 700; text-transform: none; letter-spacing: 0; }
+.badge.estimation { background: #fbe7ff; color: #6e22a0; }
+.bloc-estimation .stats { color: var(--gris); font-size: .85rem; margin: 0 0 .5rem; }
+.bloc-estimation .valeur-reelle { margin: 0 0 .5rem; }
+.bloc-estimation tr.gagnante td { background: var(--vert-clair); font-weight: 700; }
+.miser-estimation { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin-top: .4rem; }
+.miser-estimation input { width: 9rem; }
+.bascule { display: inline-flex; border: 1px solid var(--bleu); border-radius: 4px; overflow: hidden; margin-bottom: .6rem; }
+.bascule button { background: #fff; color: var(--bleu); border-radius: 0; padding: .25rem .8rem; font-size: .85rem; }
+.bascule button.actif { background: var(--bleu); color: #fff; }
+.mon-equipe { margin-bottom: 1rem; }
+.mon-equipe label { display: flex; gap: .5rem; align-items: center; font-weight: 600; }
+.choix-type label { display: block; font-weight: 400; }
+.choix-type label input { margin-right: .4rem; }
+.courbe-cotes { margin-top: .7rem; }
+.courbe-cotes > summary { cursor: pointer; color: var(--bleu); font-size: .88rem; }
+a.bouton {
+  display: inline-block; background: var(--bleu); color: #fff; text-decoration: none;
+  padding: .45rem .9rem; border-radius: 4px;
+}
+.actions-globales { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin-bottom: 1rem; }
+.actions-globales .aide { flex: 1 1 18rem; }
+.admin-pari .actions.cloture { padding-top: .6rem; border-top: 1px dashed var(--bord); }
+.admin-etape { margin-top: .8rem; }
+.admin-etape textarea, .vue-admin textarea { width: 100%; margin-top: .4rem; }
+.vue-admin .actions { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin-top: .5rem; }
+input.large { flex: 1 1 16rem; }
+
+/* Calendrier : frise verticale --------------------------------------------- */
+.frise { list-style: none; margin: 0; padding: 0 0 0 1.2rem; border-left: 3px solid var(--bleu-clair); }
+.frise > li { position: relative; margin: 0 0 1rem; }
+.etape-frise { display: grid; grid-template-columns: 8.5rem minmax(0, 1fr); gap: .3rem 1rem;
+  background: var(--carte); border: 1px solid var(--bord); border-radius: var(--rayon); padding: .8rem 1rem; }
+@media (max-width: 600px) { .etape-frise { grid-template-columns: 1fr; } }
+.etape-frise::before { content: ""; position: absolute; left: -1.75rem; top: 1rem; width: .8rem; height: .8rem;
+  border-radius: 50%; background: var(--bleu); border: 2px solid var(--fond); }
+.etape-frise.passee { opacity: .65; }
+.etape-frise.passee::before { background: var(--gris); }
+.etape-frise.aujourdhui { border-color: var(--vert); }
+.etape-frise.aujourdhui::before { background: var(--vert); }
+.etape-date { font-weight: 700; color: var(--bleu); text-transform: capitalize; }
+.etape-frise h3 { font-size: 1rem; margin-bottom: .2rem; }
+.etape-frise .desc { color: var(--gris); font-size: .9rem; margin: 0 0 .4rem; }
+.puces { display: flex; flex-wrap: wrap; gap: .35rem; }
+.puce-pari { font-size: .82rem; padding: .15rem .55rem; border-radius: 1rem; text-decoration: none;
+  background: #eee; color: #444; border: 1px solid transparent; }
+.puce-pari.ouvert { background: var(--vert-clair); color: var(--vert); }
+.puce-pari.suspendu { background: #feecc2; color: var(--or); }
+.puce-pari:hover { border-color: currentColor; }
+.repere-aujourdhui { margin: -.2rem 0 1rem; }
+.repere-aujourdhui span { position: relative; left: -1.9rem; background: var(--vert); color: #fff; font-size: .72rem;
+  font-weight: 700; text-transform: uppercase; padding: .1rem .5rem; border-radius: 3px; }
+
+/* Courbes -------------------------------------------------------------------- */
+.graphique { margin-top: .6rem; }
+.legende { display: flex; flex-wrap: wrap; gap: .3rem 1rem; font-size: .82rem; color: var(--texte); margin-bottom: .3rem; }
+.legende i, .infobulle i { display: inline-block; width: 1rem; border-top: 2px solid; vertical-align: middle; margin-right: .35rem; }
+.zone-graphique { position: relative; }
+.zone-graphique svg { width: 100%; height: auto; display: block; overflow: visible; touch-action: pan-y; }
+.zone-graphique svg:focus-visible { outline: 2px solid var(--bleu); outline-offset: 2px; }
+.zone-graphique .grille { stroke: #ececec; stroke-width: 1; }
+.zone-graphique .axe { fill: var(--gris); font-size: 11px; font-variant-numeric: tabular-nums; }
+.zone-graphique .etiquette { fill: var(--texte); font-size: 11px; }
+.zone-graphique .reticule { stroke: #999; stroke-width: 1; stroke-dasharray: 3 3; }
+.infobulle { position: absolute; top: .3rem; background: #fff; border: 1px solid var(--bord); border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0,0,0,.12); padding: .45rem .6rem; font-size: .8rem; pointer-events: none; min-width: 9rem; }
+.infobulle .bulle-date { color: var(--gris); font-size: .75rem; margin-bottom: .2rem; }
+.infobulle b { margin-right: .4rem; font-variant-numeric: tabular-nums; }
+.infobulle span { color: var(--gris); }
+.donnees { margin-top: .4rem; font-size: .85rem; }
+.donnees summary { cursor: pointer; color: var(--bleu); }
 
 .toast {
   position: fixed; bottom: 1.2rem; left: 50%; transform: translateX(-50%);

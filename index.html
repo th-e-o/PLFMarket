@@ -9,10 +9,10 @@
 <body>
   <header class="entete">
     <div class="marque">
-      <span class="logo">🔔</span>
+      <span class="logo">🪙</span>
       <div>
         <h1>Les paris du PLF</h1>
-        <p class="sous-titre">Du dépôt à la promulgation : misez vos clochettes</p>
+        <p class="sous-titre">Du dépôt à la promulgation : misez vos deniers publics</p>
       </div>
     </div>
     <div id="compte" class="compte"></div>
@@ -30,6 +30,8 @@
         <button data-onglet="ouverts" class="actif">Paris en cours</button>
         <button data-onglet="clos">Paris clôturés</button>
         <button data-onglet="mes-mises">Mes mises</button>
+        <button data-onglet="calendrier">Calendrier</button>
+        <button data-onglet="stats">Statistiques</button>
         <button data-onglet="proposer">+ Proposer un pari</button>
         <button data-onglet="admin" id="onglet-admin" hidden>Administration</button>
       </nav>
@@ -37,6 +39,18 @@
       <div id="vue-ouverts" class="vue"></div>
       <div id="vue-clos" class="vue" hidden></div>
       <div id="vue-mes-mises" class="vue" hidden></div>
+      <div id="vue-calendrier" class="vue" hidden></div>
+      <div id="vue-stats" class="vue" hidden>
+        <div class="carte">
+          <div class="carte-titre">
+            <h2>Évolution des deniers publics</h2>
+            <label class="aide">Comparer avec <select id="stats-comparer" data-k="stats-comparer"></select></label>
+          </div>
+          <p class="aide">Les 5 premiers du classement, vous-même et le joueur choisi. Le total ne bouge qu'à la
+            clôture des paris (gains et pertes) et lors des ajustements de l'administration.</p>
+          <div id="stats-joueurs"><p class="vide">Chargement…</p></div>
+        </div>
+      </div>
 
       <div id="vue-proposer" class="vue" hidden>
         <div class="carte">
@@ -45,13 +59,24 @@
             (ou annule le pari s'il est ambigu) : précisez bien la règle d'arbitrage.</p>
           <p id="proposer-connexion" class="vide" hidden>Connectez-vous ou créez un compte (en haut à droite) pour proposer un pari.</p>
           <form id="form-pari" class="form-pari">
+            <fieldset class="choix-type">
+              <legend>Type de pari</legend>
+              <label><input type="radio" name="type" value="choix" checked> Choix entre plusieurs issues
+                <span class="aide">(Oui / Non, fourchettes…)</span></label>
+              <label><input type="radio" name="type" value="estimation"> Estimation d'un chiffre
+                <span class="aide">(chacun donne une valeur, la plus proche gagne)</span></label>
+            </fieldset>
             <label>Intitulé<input name="titre" required minlength="5" maxlength="200" placeholder="Ex. : Le 49.3 sera-t-il utilisé ?"></label>
             <div class="deux-colonnes">
               <label>Catégorie<input name="categorie" maxlength="40" placeholder="Procédure, Vote, Chiffres…" list="categories"></label>
-              <label>Fin des mises (facultatif)<input name="date_limite" type="datetime-local"></label>
+              <label>Fin des mises (conseillée)<input name="date_limite" type="datetime-local"></label>
+            </div>
+            <div class="deux-colonnes">
+              <label>Étape du calendrier (facultatif)<select name="etape_id" id="form-pari-etape"></select></label>
+              <label id="form-pari-unite" hidden>Unité (facultatif)<input name="unite" maxlength="30" placeholder="% du PIB, amendements…"></label>
             </div>
             <label>Précisions / règle d'arbitrage<textarea name="description" rows="2" maxlength="500"></textarea></label>
-            <fieldset>
+            <fieldset id="form-pari-issues">
               <legend>Issues possibles</legend>
               <div id="issues-form"></div>
               <div class="ligne-form">
@@ -81,10 +106,12 @@
           <nav class="onglets sous-onglets" id="onglets-admin">
             <button data-onglet-admin="paris" class="actif">Paris</button>
             <button data-onglet-admin="joueurs">Joueurs</button>
+            <button data-onglet-admin="calendrier">Calendrier</button>
             <button data-onglet-admin="reglages">Réglages</button>
           </nav>
           <div id="admin-paris" class="vue-admin"></div>
           <div id="admin-joueurs" class="vue-admin" hidden></div>
+          <div id="admin-calendrier" class="vue-admin" hidden></div>
           <div id="admin-reglages" class="vue-admin" hidden></div>
         </div>
       </div>
@@ -96,6 +123,10 @@
           <h2>Classement</h2>
           <span class="direct" title="Mis à jour automatiquement"><i></i>en direct</span>
         </div>
+        <div class="bascule" id="bascule-classement" hidden>
+          <button data-classement="joueurs" class="actif">Joueurs</button>
+          <button data-classement="equipes">Équipes</button>
+        </div>
         <div id="classement"></div>
       </div>
       <div class="carte">
@@ -105,20 +136,26 @@
       <details class="carte regles">
         <summary>Règles du jeu</summary>
         <ul>
-          <li>Chaque joueur démarre avec <b id="capital">1000</b> clochettes 🔔.</li>
+          <li>Chaque joueur démarre avec <b id="capital">1000</b> deniers publics 🪙.</li>
           <li>Répartissez-les librement entre les issues des paris ouverts.</li>
           <li>Les cotes dépendent des mises des joueurs : moins les autres croient à une issue, plus elle rapporte.
             Elles bougent à chaque mise, jusqu'à la clôture.</li>
-          <li>Pour que les cotes soient intéressantes dès l'ouverture, la banque mise <b id="amorce">100</b> 🔔 sur
+          <li>Pour que les cotes soient intéressantes dès l'ouverture, la banque mise <b id="amorce">100</b> 🪙 sur
             chaque issue (un Oui/Non démarre à ×2). Cote d'une issue = <i>(cagnotte + mises de la banque) ÷
             (mises sur l'issue + mise de la banque)</i>.</li>
           <li>L'administration peut ajuster la cote d'une issue (en modifiant la mise de la banque) ;
             les mises suivantes la font ensuite évoluer normalement.</li>
           <li>À la clôture, chaque mise gagnante rapporte <i>mise × cote finale</i> ; une mise perdante est perdue.</li>
+          <li>Pas de pari à coup sûr : une mise placée après que le résultat est connu (heure indiquée par
+            l'administration à la clôture) est simplement remboursée.</li>
+          <li>Paris sur un chiffre : chacun donne une estimation (secrète jusqu'à la clôture) et sa mise ;
+            l'estimation la plus proche emporte la cagnotte et l'apport de la banque (partage au prorata des
+            mises en cas d'égalité).</li>
           <li>Chacun peut proposer des paris (5 par jour au plus).</li>
           <li>Les gains sont immédiatement réinvestissables sur les paris encore ouverts.</li>
           <li>Pari annulé : les mises sont remboursées.</li>
-          <li>Le classement compte les clochettes disponibles + celles engagées sur des paris en cours.</li>
+          <li>Le classement compte les deniers publics disponibles + ceux engagés sur des paris en cours.
+            Les équipes sont classées à la moyenne par joueur.</li>
         </ul>
       </details>
     </aside>

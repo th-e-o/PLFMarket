@@ -1,4 +1,4 @@
-# Les paris du PLF 🔔 — version hébergement web OVH
+# Les paris du PLF 🪙 — version hébergement web OVH
 
 Site statique (HTML/CSS/JS) + `api.php` (PHP ≥ 8.1). Base de données : un fichier SQLite créé
 automatiquement dans `data/` (rien à configurer), ou MySQL en option.
@@ -20,7 +20,7 @@ La base (`data/*.db`) n'est jamais écrasée.
 
 Facultatif :
 - variable `FTP_DOSSIER` (onglet *Variables*) : dossier cible, `www/` par défaut (ex. `www/plf/`, avec le `/` final) ;
-- variable `PLF_CAPITAL` : clochettes de départ (1000 par défaut) ;
+- variable `PLF_CAPITAL` : deniers publics de départ (1000 par défaut) ;
 - variable `PLF_AMORCE` : mise fictive de la banque sur chaque issue, qui fixe les cotes de départ
   et leur stabilité (100 par défaut, 0 pour un pari mutuel pur) ;
 - secrets `PLF_DB_DSN`, `PLF_DB_USER`, `PLF_DB_PASSWORD` : utiliser MySQL au lieu de SQLite
@@ -35,14 +35,42 @@ racine identique à `FTP_DOSSIER`.
 
 ## Administration
 
-Adresse du site suivie de `#admin`, mot de passe `PLF_ADMIN_PASSWORD`. Trois sous-onglets :
+Adresse du site suivie de `#admin`, mot de passe `PLF_ADMIN_PASSWORD`. Quatre sous-onglets :
 
-- **Paris** : modifier un pari (textes, date limite, libellés ; ajouter ou retirer des issues sans
-  mise tant qu'il est en cours), miser pour un joueur, supprimer une mise (remboursée), suspendre,
-  clôturer, annuler, et revenir sur une clôture ou une annulation (les gains sont repris).
-- **Joueurs** : renommer, donner un nouveau code, créditer ou débiter des clochettes (visible dans le
-  fil), supprimer un joueur et ses mises.
-- **Réglages** : capital de départ et amorce, qui priment alors sur `PLF_CAPITAL` et `PLF_AMORCE`.
+- **Paris** : « Tout suspendre » (coupe d'un coup les mises de tous les paris ouverts, en séance) puis
+  « Rouvrir » (seulement les paris ainsi suspendus) ; modifier un pari (textes, date limite, étape du
+  calendrier, libellés ; ajouter ou retirer des issues sans mise tant qu'il est en cours), miser pour un
+  joueur, supprimer une mise (remboursée), suspendre, clôturer, annuler, et revenir sur une clôture ou une
+  annulation (les gains sont repris). À la clôture, indiquer **l'heure où le résultat a été connu** : les
+  mises placées depuis sont remboursées et ne comptent pas dans la cagnotte.
+- **Joueurs** : renommer, donner un nouveau code, changer d'équipe, créditer ou débiter des deniers publics
+  (visible dans le fil), supprimer un joueur et ses mises.
+- **Calendrier** : étapes de l'examen du PLF (date, intitulé), affichées en frise dans l'onglet Calendrier ;
+  chaque pari peut être rattaché à une étape.
+- **Réglages** : capital de départ et amorce (priment sur `PLF_CAPITAL` et `PLF_AMORCE`), code
+  d'invitation (exigé à l'inscription s'il est défini), équipes, sauvegarde téléchargeable.
+
+## Règles d'équité et sécurité
+
+- **Mises tardives** : remboursées si placées après l'heure de réalisation indiquée à la clôture
+  (les mises saisies par l'administration, transmises à temps, ne le sont jamais).
+- **Anti-force brute** : 5 codes erronés en 15 min bloquent le compte visé ; 10 mots de passe admin erronés
+  ou 10 codes d'invitation erronés bloquent l'adresse IP (15 min). Limites dans les constantes `LIMITE_*`
+  d'`api.php`, larges par adresse IP car les collègues peuvent partager celle du proxy.
+- **Code d'invitation** : contre les inconnus et les comptes multiples.
+
+## Types de paris
+
+- **Choix** : 2 à 8 issues, pari mutuel amorcé par la banque (voir les règles du jeu sur le site).
+- **Estimation d'un chiffre** : chaque joueur donne une estimation (secrète jusqu'à la clôture) et une
+  mise ; la ou les estimations les plus proches de la valeur réelle se partagent la cagnotte et l'apport de
+  la banque (l'amorce), au prorata des mises.
+
+## Performances
+
+Le navigateur interroge le serveur toutes les 4 s en envoyant la version de l'état déjà reçue ; tant que
+rien n'a changé (aucune écriture, même minute), le serveur répond `{"inchange": true}` sans recalculer.
+Les courbes (évolution des cotes d'un pari, des deniers publics des joueurs) sont chargées à la demande.
 
 ## Mises à jour de la base
 
@@ -52,7 +80,9 @@ joueurs ni aux mises existants.
 
 ## Sauvegarde des données
 
-Télécharger `data/plf.db` par FTP (FileZilla, explorateur FTP de l'espace client).
+Administration → Réglages → « Télécharger une sauvegarde complète » (fichier `.db` avec SQLite, export
+JSON avec MySQL). Pour restaurer une base SQLite, remplacer `data/plf.db` par ce fichier via FTP.
+Ne pas la verser dans le dépôt GitHub, qui est public.
 
 ## Tester en local
 

@@ -4,7 +4,7 @@ return [
     // Mot de passe de l'administration (…/#admin). Choisissez-le long.
     'admin_password' => 'changez-moi',
 
-    // Clochettes de départ par joueur.
+    // Deniers publics de départ par joueur.
     'capital' => 1000,
 
     // Mise fictive de la banque sur chaque issue d'un pari : rend les cotes attrayantes dès l'ouverture
