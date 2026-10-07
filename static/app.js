@@ -436,8 +436,13 @@ document.addEventListener("input", (ev) => {
 $("#ajout-issue").addEventListener("click", () => ajouterLigneIssue());
 $("#admin-deconnexion").addEventListener("click", () => action(api("admin/deconnexion", { method: "POST" })));
 
-// Accès direct à l'administration via l'URL …/#admin
+// Accès à l'administration via l'URL …/#admin, au chargement ou en cours de visite
 if (location.hash === "#admin") onglet = "admin";
+window.addEventListener("hashchange", () => {
+  if (location.hash !== "#admin") return;
+  onglet = "admin";
+  if (etat) rendre();
+});
 
 reinitialiserFormPari();
 rafraichir();
