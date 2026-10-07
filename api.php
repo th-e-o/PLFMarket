@@ -42,8 +42,23 @@ const PARIS_V2 = [
      "Déficit public prévu par la loi de finances initiale promulguée.", ['Oui', 'Non']],
 ];
 
-const VERSION_BASE = 6;
+const VERSION_BASE = 7;
 const PROPOSITIONS_PAR_JOUR = 5;
+const DUREES_FLASH = [2, 5, 10, 15, 30, 60]; // minutes
+const COMMENTAIRE_MAX = 280; // caractères
+const COMMENTAIRES_PAR_FENETRE = [5, 120]; // au plus 5 commentaires par joueur en 2 minutes
+const RAPPORTEUR_SEUIL = 5; // joueurs attirés par un pari proposé
+
+// Trophées : code => [icône, nom, condition]. Calculés à partir de l'historique (voir trophees()).
+const TROPHEES = [
+    'nostradamus' => ['🔮', 'Nostradamus', 'A gagné une mise à ×5 ou plus'],
+    'serie' => ['🔥', 'En série', "A gagné 3 paris d'affilée"],
+    'cassandre' => ['🧊', 'Cassandre', "A perdu 3 paris d'affilée"],
+    'tapis' => ['🎲', '49.3', "A misé tout son solde disponible d'un coup"],
+    'eclair' => ['⚡', 'Éclair', 'A gagné un pari flash'],
+    'mille' => ['🎯', 'Dans le mille', "A trouvé la valeur exacte d'un pari sur un chiffre"],
+    'rapporteur' => ['📜', 'Rapporteur général', 'A proposé un pari qui a attiré au moins ' . RAPPORTEUR_SEUIL . ' joueurs'],
+];
 const TYPES_PARI = ['choix', 'estimation'];
 
 // Limites anti-force brute : [nombre maximal, fenêtre en secondes]. Les collègues pouvant partager
@@ -300,6 +315,21 @@ function migrer(PDO $pdo, int $version): void
         // Point de départ des courbes de cotes pour les paris déjà ouverts
         foreach ($pdo->query("SELECT id FROM paris WHERE statut IN ('ouvert', 'suspendu')")->fetchAll(PDO::FETCH_COLUMN) as $id) {
             capturer_cotes((int)$id);
+        }
+    }
+    if ($version < 7) { // paris flash, trophées (mise « tapis »), commentaires
+        $pdo->exec('ALTER TABLE paris ADD COLUMN flash INTEGER NOT NULL DEFAULT 0');
+        $pdo->exec('ALTER TABLE mises ADD COLUMN tapis INTEGER NOT NULL DEFAULT 0');
+        foreach (est_sqlite() ? [
+            'CREATE TABLE IF NOT EXISTS commentaires (id INTEGER PRIMARY KEY, pari_id INTEGER NOT NULL,
+                 joueur_id INTEGER NOT NULL, texte TEXT NOT NULL, cree_le TEXT NOT NULL)',
+            'CREATE INDEX IF NOT EXISTS idx_commentaires_pari ON commentaires(pari_id)',
+        ] : [
+            'CREATE TABLE IF NOT EXISTS commentaires (id INT AUTO_INCREMENT PRIMARY KEY, pari_id INT NOT NULL,
+                 joueur_id INT NOT NULL, texte TEXT NOT NULL, cree_le CHAR(19) NOT NULL, INDEX (pari_id), INDEX (joueur_id)
+             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci',
+        ] as $ordre) {
+            $pdo->exec($ordre);
         }
     }
     $pdo->exec("DELETE FROM reglages WHERE cle IN ('version', 'revision')");
@@ -626,6 +656,49 @@ function lire_equipe(mixed $v): ?int
     return $id;
 }
 
+/**
+ * Clé de comparaison d'un nom d'équipe : sans casse, accents, espaces ni ponctuation, pour que
+ * « DG75 », « dg 75 » et « DG-75 » désignent la même équipe (sans dépendre de l'extension mbstring).
+ */
+function cle_equipe(string $nom): string
+{
+    $s = strtr($nom, ['À' => 'a', 'Â' => 'a', 'Ä' => 'a', 'à' => 'a', 'â' => 'a', 'ä' => 'a', 'Ç' => 'c', 'ç' => 'c',
+        'É' => 'e', 'È' => 'e', 'Ê' => 'e', 'Ë' => 'e', 'é' => 'e', 'è' => 'e', 'ê' => 'e', 'ë' => 'e',
+        'Î' => 'i', 'Ï' => 'i', 'î' => 'i', 'ï' => 'i', 'Ô' => 'o', 'Ö' => 'o', 'ô' => 'o', 'ö' => 'o',
+        'Ù' => 'u', 'Û' => 'u', 'Ü' => 'u', 'ù' => 'u', 'û' => 'u', 'ü' => 'u', 'Ÿ' => 'y', 'ÿ' => 'y',
+        'Œ' => 'oe', 'œ' => 'oe', 'Æ' => 'ae', 'æ' => 'ae']);
+    return strtolower((string)preg_replace('/[^\p{L}\p{N}]+/u', '', $s));
+}
+
+/** Équipe existante dont le nom correspond (voir cle_equipe), ou null. */
+function trouver_equipe(string $nom, ?int $sauf = null): ?array
+{
+    $cle = cle_equipe($nom);
+    foreach (q('SELECT id, nom FROM equipes')->fetchAll() as $e) {
+        if ((int)$e['id'] !== $sauf && cle_equipe($e['nom']) === $cle) return $e;
+    }
+    return null;
+}
+
+/**
+ * Équipe choisie par un joueur : « equipe » (nom saisi : rejoint l'équipe existante correspondante,
+ * ou la crée) ou « equipe_id ». Vide : sans équipe.
+ * @return array{0: ?int, 1: ?string, 2: bool} [id, nom, créée]
+ */
+function equipe_saisie(array $d): array
+{
+    if (!array_key_exists('equipe', $d)) {
+        $id = lire_equipe($d['equipe_id'] ?? null);
+        return [$id, $id ? q('SELECT nom FROM equipes WHERE id = ?', [$id])->fetchColumn() : null, false];
+    }
+    $nom = (string)preg_replace('/\s+/u', ' ', trim((string)$d['equipe']));
+    if ($nom === '') return [null, null, false];
+    $nom = lire_nom_equipe($nom);
+    if ($e = trouver_equipe($nom)) return [(int)$e['id'], $e['nom'], false];
+    q('INSERT INTO equipes (nom) VALUES (?)', [$nom]);
+    return [(int)db()->lastInsertId(), $nom, true];
+}
+
 /** Identifiant d'étape du calendrier existante, ou null. */
 function lire_etape(mixed $v): ?int
 {
@@ -645,12 +718,77 @@ function entier(mixed $v, string $message): int
 // Routes publiques
 // ---------------------------------------------------------------------------
 
+/**
+ * Trophées obtenus : joueur_id => [code => date d'obtention]. Tout se déduit de l'historique (mises
+ * non tardives, paris clôturés), sauf la mise « tapis », notée au moment de la mise.
+ */
+function trophees(): array
+{
+    $t = [];
+    $obtenir = function (int $joueur, string $code, ?string $date) use (&$t) {
+        if ($date && (!isset($t[$joueur][$code]) || $date < $t[$joueur][$code])) $t[$joueur][$code] = $date;
+    };
+    // Résultat de chaque joueur sur chaque pari clôturé, dans l'ordre des clôtures
+    $resultats = q("
+        SELECT m.joueur_id, m.pari_id, p.clos_le, p.type, p.flash,
+               SUM(m.gain) AS gain,
+               MAX(CASE WHEN m.issue_id = p.issue_gagnante_id THEN 1 ELSE 0 END) AS sur_gagnante,
+               MAX(CASE WHEN m.gain > 0 AND m.gain >= 5 * m.montant THEN 1 ELSE 0 END) AS cote5,
+               MAX(CASE WHEN p.type = 'estimation' AND ABS(m.estimation - p.valeur_reelle) < 1e-9 THEN 1 ELSE 0 END) AS exacte
+        FROM mises m JOIN paris p ON p.id = m.pari_id
+        WHERE p.statut = 'clos' AND m.tardive = 0
+        GROUP BY m.joueur_id, m.pari_id, p.clos_le, p.type, p.flash
+        ORDER BY p.clos_le, m.pari_id")->fetchAll();
+    $series = []; // joueur => [sens (1 gagné, -1 perdu), longueur]
+    foreach ($resultats as $r) {
+        $j = (int)$r['joueur_id'];
+        $gagne = (int)$r['gain'] > 0 && ($r['type'] === 'estimation' || $r['sur_gagnante']);
+        $perdu = (int)$r['gain'] === 0;
+        if ($r['cote5']) $obtenir($j, 'nostradamus', $r['clos_le']);
+        if ($r['exacte']) $obtenir($j, 'mille', $r['clos_le']);
+        if ($gagne && $r['flash']) $obtenir($j, 'eclair', $r['clos_le']);
+        $sens = $gagne ? 1 : ($perdu ? -1 : 0); // remboursé : la série s'interrompt
+        [$sensPrecedent, $longueur] = $series[$j] ?? [0, 0];
+        $series[$j] = [$sens, $sens !== 0 && $sens === $sensPrecedent ? $longueur + 1 : ($sens !== 0 ? 1 : 0)];
+        if ($series[$j][1] >= 3) $obtenir($j, $sens > 0 ? 'serie' : 'cassandre', $r['clos_le']);
+    }
+    foreach (q('SELECT joueur_id, MIN(cree_le) AS quand FROM mises WHERE tapis = 1 GROUP BY joueur_id') as $m) {
+        $obtenir((int)$m['joueur_id'], 'tapis', $m['quand']);
+    }
+    // Rapporteur général : date à laquelle le N-ième joueur a misé sur un pari proposé
+    $premieres = [];
+    foreach (q('SELECT p.auteur_id, m.pari_id, m.joueur_id, MIN(m.cree_le) AS quand
+                FROM mises m JOIN paris p ON p.id = m.pari_id
+                WHERE p.auteur_id IS NOT NULL AND m.tardive = 0
+                GROUP BY p.auteur_id, m.pari_id, m.joueur_id') as $m) {
+        $premieres[$m['pari_id']]['auteur'] = (int)$m['auteur_id'];
+        $premieres[$m['pari_id']]['dates'][] = $m['quand'];
+    }
+    foreach ($premieres as $p) {
+        if (count($p['dates']) < RAPPORTEUR_SEUIL) continue;
+        sort($p['dates']);
+        $obtenir($p['auteur'], 'rapporteur', $p['dates'][RAPPORTEUR_SEUIL - 1]);
+    }
+    foreach ($t as &$codes) uksort($codes, fn($a, $b) => array_search($a, array_keys(TROPHEES)) <=> array_search($b, array_keys(TROPHEES)));
+    unset($codes);
+    return $t;
+}
+
 function route_etat(): array
 {
     $moi = joueur_connecte();
     session_write_close(); // libère la session : les rafraîchissements ne se bloquent pas entre eux
     $joueurs = classement();
     $equipes = q('SELECT id, nom FROM equipes ORDER BY nom')->fetchAll();
+    $trophees = trophees();
+    foreach ($joueurs as &$j) $j['trophees'] = array_keys($trophees[$j['id']] ?? []);
+    unset($j);
+    $commentaires = [];
+    foreach (q('SELECT c.id, c.pari_id, c.joueur_id, c.texte, c.cree_le, j.pseudo
+                FROM commentaires c JOIN joueurs j ON j.id = c.joueur_id ORDER BY c.cree_le, c.id') as $c) {
+        $commentaires[$c['pari_id']][] = ['id' => (int)$c['id'], 'joueur_id' => (int)$c['joueur_id'], 'joueur' => $c['pseudo'],
+                                          'texte' => $c['texte'], 'date' => $c['cree_le']];
+    }
 
     $issuesParPari = $masseIssue = $massePari = $poids = [];
     foreach (q('
@@ -713,6 +851,7 @@ function route_etat(): array
             'unite' => (string)$p['unite'],
             'etape_id' => $p['etape_id'] === null ? null : (int)$p['etape_id'],
             'auteur' => $p['auteur'],
+            'flash' => (bool)$p['flash'],
             'statut' => $p['statut'],
             'accepte_mises' => accepte_les_mises($p),
             'date_limite' => $p['date_limite'],
@@ -725,6 +864,7 @@ function route_etat(): array
             'nb_tardives' => (int)$p['nb_tardives'],
             'issues' => $issues,
             'estimations' => $estimation && $p['statut'] === 'clos' ? $liste : null,
+            'commentaires' => array_slice($commentaires[$p['id']] ?? [], -50),
         ];
     }
     $typesParPari = array_column($paris, 'type', 'id');
@@ -775,7 +915,9 @@ function route_etat(): array
                               q('SELECT * FROM etapes ORDER BY date_etape, id')->fetchAll()),
         'paris' => $paris,
         'mes_mises' => $mesMises,
-        'fil' => fil_actualite(),
+        'trophees' => array_map(fn($t) => ['icone' => $t[0], 'nom' => $t[1], 'condition' => $t[2]], TROPHEES),
+        'mes_trophees' => $moi ? ($trophees[(int)$moi['id']] ?? []) : [],
+        'fil' => fil_actualite(30, $trophees),
         'donnees_admin' => empty($_SESSION['admin']) ? null : donnees_admin(),
     ];
 }
@@ -835,7 +977,7 @@ function route_historique_cotes(): array
     ];
 }
 
-function fil_actualite(int $limite = 30): array
+function fil_actualite(int $limite = 30, array $trophees = []): array
 {
     $evenements = [];
     foreach (q("
@@ -864,9 +1006,24 @@ function fil_actualite(int $limite = 30): array
                          'unite' => (string)$p['unite']];
     }
     foreach (q("
-        SELECT p.cree_le, p.titre, j.pseudo FROM paris p LEFT JOIN joueurs j ON j.id = p.auteur_id
+        SELECT p.cree_le, p.titre, p.flash, p.date_limite, j.pseudo FROM paris p LEFT JOIN joueurs j ON j.id = p.auteur_id
         ORDER BY p.cree_le DESC, p.id DESC LIMIT $limite") as $p) {
-        $evenements[] = ['date' => $p['cree_le'], 'type' => 'pari', 'pari' => $p['titre'], 'joueur' => $p['pseudo']];
+        $evenements[] = ['date' => $p['cree_le'], 'type' => $p['flash'] ? 'flash' : 'pari', 'pari' => $p['titre'],
+                         'joueur' => $p['pseudo'], 'date_limite' => $p['date_limite']];
+    }
+    foreach (q("
+        SELECT c.cree_le, c.texte, j.pseudo, p.titre FROM commentaires c
+        JOIN joueurs j ON j.id = c.joueur_id JOIN paris p ON p.id = c.pari_id
+        ORDER BY c.cree_le DESC, c.id DESC LIMIT $limite") as $c) {
+        $evenements[] = ['date' => $c['cree_le'], 'type' => 'commentaire', 'joueur' => $c['pseudo'], 'pari' => $c['titre'],
+                         'texte' => $c['texte']];
+    }
+    $pseudos = array_column(q('SELECT id, pseudo FROM joueurs')->fetchAll(), 'pseudo', 'id');
+    foreach ($trophees as $joueurId => $codes) {
+        foreach ($codes as $code => $date) {
+            $evenements[] = ['date' => $date, 'type' => 'trophee', 'joueur' => $pseudos[$joueurId] ?? '?',
+                             'icone' => TROPHEES[$code][0], 'trophee' => TROPHEES[$code][1]];
+        }
     }
     foreach (q("
         SELECT a.cree_le, a.montant, a.motif, j.pseudo FROM ajustements a JOIN joueurs j ON j.id = a.joueur_id
@@ -895,19 +1052,19 @@ function route_inscription(): array
     }
     $pseudo = lire_pseudo(donnees()['pseudo'] ?? '');
     $pin = lire_code(donnees()['pin'] ?? '');
-    $id = transaction(function () use ($pseudo, $pin) {
-        $equipe = lire_equipe(donnees()['equipe_id'] ?? null);
+    [$id, $equipe] = transaction(function () use ($pseudo, $pin) {
         if (q('SELECT 1 FROM joueurs WHERE pseudo = ?', [$pseudo])->fetch()) {
             throw new ErreurApi('Ce pseudo est déjà pris.', 409);
         }
+        $equipe = equipe_saisie(donnees());
         q('INSERT INTO joueurs (pseudo, pin_hash, cree_le, equipe_id) VALUES (?, ?, ?, ?)',
-          [$pseudo, password_hash($pin, PASSWORD_DEFAULT), maintenant(), $equipe]);
-        return (int)db()->lastInsertId();
+          [$pseudo, password_hash($pin, PASSWORD_DEFAULT), maintenant(), $equipe[0]]);
+        return [(int)db()->lastInsertId(), $equipe];
     });
     noter_tentative("inscription:ip:$ip");
     session_regenerate_id(true);
     $_SESSION['joueur_id'] = $id;
-    return ['ok' => true];
+    return ['ok' => true, 'equipe' => $equipe[1], 'equipe_creee' => $equipe[2]];
 }
 
 function route_connexion(): array
@@ -929,14 +1086,15 @@ function route_connexion(): array
     return ['ok' => true];
 }
 
-/** Le joueur choisit (ou quitte) son équipe. */
+/** Mon profil : le joueur rejoint, crée ou quitte une équipe. */
 function route_profil(): array
 {
     $moi = joueur_connecte();
     if (!$moi) throw new ErreurApi('Connectez-vous.', 401);
     return transaction(function () use ($moi) {
-        q('UPDATE joueurs SET equipe_id = ? WHERE id = ?', [lire_equipe(donnees()['equipe_id'] ?? null), $moi['id']]);
-        return ['ok' => true];
+        [$id, $nom, $creee] = equipe_saisie(donnees());
+        q('UPDATE joueurs SET equipe_id = ? WHERE id = ?', [$id, $moi['id']]);
+        return ['ok' => true, 'equipe' => $nom, 'equipe_creee' => $creee];
     });
 }
 
@@ -1069,8 +1227,8 @@ function miser(int $joueurId, array $d, bool $parAdmin): array
             if (q('SELECT 1 FROM mises WHERE pari_id = ? AND joueur_id = ?', [$pari['id'], $joueurId])->fetch()) {
                 throw new ErreurApi($parAdmin ? "{$joueur['pseudo']} a déjà donné son estimation." : 'Vous avez déjà donné votre estimation sur ce pari.', 409);
             }
-            q('INSERT INTO mises (joueur_id, pari_id, issue_id, montant, cote_c, cree_le, par_admin, estimation) VALUES (?, ?, ?, ?, 0, ?, ?, ?)',
-              [$joueurId, $pari['id'], $issueId, $montant, maintenant(), (int)$parAdmin, $estimation]);
+            q('INSERT INTO mises (joueur_id, pari_id, issue_id, montant, cote_c, cree_le, par_admin, estimation, tapis) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)',
+              [$joueurId, $pari['id'], $issueId, $montant, maintenant(), (int)$parAdmin, $estimation, (int)($montant === $disponible)]);
             return ['ok' => true, 'cote' => null, 'gain_estime' => null];
         }
         $masse = $montant + (int)q('SELECT COALESCE(SUM(montant), 0) FROM mises WHERE pari_id = ?', [$pari['id']])->fetchColumn();
@@ -1079,16 +1237,75 @@ function miser(int $joueurId, array $d, bool $parAdmin): array
         $w = $issue['poids_banque'] === null ? null : (float)$issue['poids_banque'];
         $cote = cote($masse, $masseIssue, $n, $w);
         // cote_c : cote au moment de la mise, à titre indicatif (le gain se calcule à la clôture)
-        q('INSERT INTO mises (joueur_id, pari_id, issue_id, montant, cote_c, cree_le, par_admin) VALUES (?, ?, ?, ?, ?, ?, ?)',
-          [$joueurId, $pari['id'], $issueId, $montant, (int)floor($cote * 100), maintenant(), (int)$parAdmin]);
+        q('INSERT INTO mises (joueur_id, pari_id, issue_id, montant, cote_c, cree_le, par_admin, tapis) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+          [$joueurId, $pari['id'], $issueId, $montant, (int)floor($cote * 100), maintenant(), (int)$parAdmin, (int)($montant === $disponible)]);
         capturer_cotes((int)$pari['id']);
         return ['ok' => true, 'cote' => $cote, 'gain_estime' => intdiv($montant * a_verser($masse, $masseIssue, $n, $w), $masseIssue)];
+    });
+}
+
+/** Commentaire (« exposé des motifs ») d'un joueur sur un pari. */
+function route_commentaire(): array
+{
+    $moi = joueur_connecte();
+    if (!$moi) throw new ErreurApi('Connectez-vous pour commenter.', 401);
+    $texte = trim((string)preg_replace('/\s+/u', ' ', (string)(donnees()['texte'] ?? '')));
+    if ($texte === '') throw new ErreurApi('Le commentaire est vide.');
+    if (longueur($texte) > COMMENTAIRE_MAX) throw new ErreurApi('Le commentaire est limité à ' . COMMENTAIRE_MAX . ' caractères.');
+    $pariId = entier(donnees()['pari_id'] ?? null, 'Pari invalide.');
+    return transaction(function () use ($moi, $texte, $pariId) {
+        lire_pari($pariId);
+        [$max, $fenetre] = COMMENTAIRES_PAR_FENETRE;
+        $recents = (int)q('SELECT COUNT(*) FROM commentaires WHERE joueur_id = ? AND cree_le >= ?',
+                          [$moi['id'], date('Y-m-d\TH:i:s', time() - $fenetre)])->fetchColumn();
+        if ($recents >= $max) throw new ErreurApi('Doucement : attendez un peu avant de commenter à nouveau.', 429);
+        q('INSERT INTO commentaires (pari_id, joueur_id, texte, cree_le) VALUES (?, ?, ?, ?)', [$pariId, $moi['id'], $texte, maintenant()]);
+        return ['ok' => true];
+    });
+}
+
+/** Suppression d'un commentaire, par son auteur ou par l'administration. */
+function route_commentaire_suppression(int $id): array
+{
+    $moi = joueur_connecte();
+    $admin = !empty($_SESSION['admin']);
+    return transaction(function () use ($id, $moi, $admin) {
+        $c = q('SELECT joueur_id FROM commentaires WHERE id = ?', [$id])->fetch();
+        if (!$c) throw new ErreurApi('Commentaire introuvable.', 404);
+        if (!$admin && (!$moi || (int)$c['joueur_id'] !== (int)$moi['id'])) {
+            throw new ErreurApi('Seuls son auteur et l\'administration peuvent supprimer ce commentaire.', 403);
+        }
+        q('DELETE FROM commentaires WHERE id = ?', [$id]);
+        return ['ok' => true];
     });
 }
 
 // ---------------------------------------------------------------------------
 // Administration
 // ---------------------------------------------------------------------------
+
+/**
+ * Pari flash : ouvert immédiatement pour quelques minutes (pendant une séance). La fin des mises est
+ * arrondie à la minute supérieure, pour ne jamais fermer avant la durée annoncée.
+ */
+function route_admin_flash(): array
+{
+    $d = donnees();
+    [$titre, $description] = lire_textes_pari($d);
+    $issues = verifier_issues((array)($d['issues'] ?? ['Oui', 'Non']));
+    $minutes = entier($d['minutes'] ?? null, 'Durée invalide.');
+    if (!in_array($minutes, DUREES_FLASH, true)) throw new ErreurApi('Durée invalide.');
+    $fin = date('Y-m-d\TH:i', (int)ceil((time() + $minutes * 60) / 60) * 60);
+    return transaction(function () use ($titre, $description, $issues, $fin, $d) {
+        if (q("SELECT 1 FROM paris WHERE LOWER(titre) = LOWER(?) AND statut IN ('ouvert', 'suspendu')", [$titre])->fetch()) {
+            throw new ErreurApi('Un pari en cours porte déjà cet intitulé.', 409);
+        }
+        $id = inserer_pari(db(), 'Flash', $titre, $description, $issues, $fin);
+        q('UPDATE paris SET flash = 1, etape_id = ? WHERE id = ?', [lire_etape($d['etape_id'] ?? null), $id]);
+        capturer_cotes($id);
+        return ['ok' => true, 'id' => $id, 'date_limite' => $fin];
+    });
+}
 
 function route_admin_connexion(): array
 {
@@ -1360,6 +1577,7 @@ function route_admin_joueur_suppression(int $joueurId): array
     return transaction(function () use ($joueurId) {
         lire_joueur($joueurId);
         q('DELETE FROM mises WHERE joueur_id = ?', [$joueurId]);
+        q('DELETE FROM commentaires WHERE joueur_id = ?', [$joueurId]);
         q('DELETE FROM ajustements WHERE joueur_id = ?', [$joueurId]);
         q('UPDATE paris SET auteur_id = NULL WHERE auteur_id = ?', [$joueurId]);
         q('DELETE FROM joueurs WHERE id = ?', [$joueurId]);
@@ -1455,7 +1673,8 @@ function route_admin_suspension_generale(): array
 function lire_nom_equipe(mixed $v): string
 {
     $nom = trim((string)$v);
-    if (longueur($nom) < 1 || longueur($nom) > 60) throw new ErreurApi("Le nom d'équipe doit faire entre 1 et 60 caractères.");
+    if (longueur($nom) < 2 || longueur($nom) > 40) throw new ErreurApi("Le nom d'équipe doit faire entre 2 et 40 caractères.");
+    if (strlen(cle_equipe($nom)) < 2) throw new ErreurApi("Le nom d'équipe doit contenir au moins deux lettres ou chiffres.");
     return $nom;
 }
 
@@ -1463,7 +1682,7 @@ function route_admin_creer_equipe(): array
 {
     $nom = lire_nom_equipe(donnees()['nom'] ?? '');
     return transaction(function () use ($nom) {
-        if (q('SELECT 1 FROM equipes WHERE LOWER(nom) = LOWER(?)', [$nom])->fetch()) throw new ErreurApi('Cette équipe existe déjà.', 409);
+        if ($e = trouver_equipe($nom)) throw new ErreurApi("L'équipe « {$e['nom']} » existe déjà.", 409);
         q('INSERT INTO equipes (nom) VALUES (?)', [$nom]);
         return ['ok' => true];
     });
@@ -1474,9 +1693,7 @@ function route_admin_equipe_maj(int $id): array
     $nom = lire_nom_equipe(donnees()['nom'] ?? '');
     return transaction(function () use ($id, $nom) {
         lire_equipe($id);
-        if (q('SELECT 1 FROM equipes WHERE LOWER(nom) = LOWER(?) AND id <> ?', [$nom, $id])->fetch()) {
-            throw new ErreurApi('Cette équipe existe déjà.', 409);
-        }
+        if ($e = trouver_equipe($nom, $id)) throw new ErreurApi("L'équipe « {$e['nom']} » existe déjà.", 409);
         q('UPDATE equipes SET nom = ? WHERE id = ?', [$nom, $id]);
         return ['ok' => true];
     });
@@ -1559,7 +1776,7 @@ function route_admin_sauvegarde(): never
         }
     }
     $export = ['exporte_le' => maintenant(), 'version' => VERSION_BASE];
-    foreach (['reglages', 'joueurs', 'equipes', 'etapes', 'paris', 'issues', 'mises', 'ajustements', 'cotes_historique'] as $table) {
+    foreach (['reglages', 'joueurs', 'equipes', 'etapes', 'paris', 'issues', 'mises', 'ajustements', 'cotes_historique', 'commentaires'] as $table) {
         $export[$table] = q("SELECT * FROM $table")->fetchAll();
     }
     header('Content-Type: application/json; charset=utf-8');
@@ -1576,6 +1793,8 @@ function route_admin_suppression(int $pariId): array
             throw new ErreurApi('Impossible de supprimer un pari sur lequel des mises existent : annulez-le.', 409);
         }
         q('DELETE FROM issues WHERE pari_id = ?', [$pariId]);
+        q('DELETE FROM commentaires WHERE pari_id = ?', [$pariId]);
+        q('DELETE FROM cotes_historique WHERE pari_id = ?', [$pariId]);
         q('DELETE FROM paris WHERE id = ?', [$pariId]);
         return ['ok' => true];
     });
@@ -1616,15 +1835,18 @@ try {
         'mises' => 'route_mises',
         'paris' => 'route_creer_pari',
         'profil' => 'route_profil',
+        'commentaires' => 'route_commentaire',
         'admin/connexion' => 'route_admin_connexion',
         'admin/deconnexion' => 'route_admin_deconnexion',
     ];
     if (isset($publiques[$route])) repondre($publiques[$route]());
+    if (preg_match('#^commentaires/(\d+)/suppression$#', $route, $m)) repondre(route_commentaire_suppression((int)$m[1]));
 
     exiger_admin();
     if ($route === 'admin/mises') repondre(route_admin_miser());
     if ($route === 'admin/reglages') repondre(route_admin_reglages());
     if ($route === 'admin/suspension-generale') repondre(route_admin_suspension_generale());
+    if ($route === 'admin/flash') repondre(route_admin_flash());
     if ($route === 'admin/equipes') repondre(route_admin_creer_equipe());
     if ($route === 'admin/etapes') repondre(route_admin_creer_etape());
     $routesAdmin = [

@@ -280,6 +280,33 @@ input.large { flex: 1 1 16rem; }
 .donnees { margin-top: .4rem; font-size: .85rem; }
 .donnees summary { cursor: pointer; color: var(--bleu); }
 
+/* Profil, inscription, trophées, commentaires, paris flash ------------------- */
+button.lien.pseudo { color: var(--texte); text-decoration: none; }
+button.lien.pseudo:hover b { text-decoration: underline; }
+.trophee { cursor: help; font-size: .9em; }
+.trophees { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: .6rem; }
+.trophees li { display: flex; gap: .6rem; align-items: center; padding: .5rem .6rem; border: 1px dashed var(--bord); border-radius: 6px; opacity: .55; filter: grayscale(1); }
+.trophees li.obtenu { opacity: 1; filter: none; border-style: solid; border-color: var(--bleu-clair); background: #fafaff; }
+.trophees .icone { font-size: 1.6rem; }
+#form-profil input { flex: 1 1 14rem; }
+.commentaires { margin-top: .6rem; }
+.commentaires > summary { cursor: pointer; color: var(--bleu); font-size: .88rem; }
+.commentaires ul { list-style: none; margin: .5rem 0; padding: 0; font-size: .88rem; max-height: 18rem; overflow-y: auto; }
+.commentaires li { padding: .35rem 0; border-bottom: 1px solid #f0f0f0; overflow-wrap: anywhere; }
+.commentaires time { color: var(--gris); font-size: .75rem; margin-left: .3rem; }
+.commentaires li button.lien { margin-left: .3rem; color: var(--gris); text-decoration: none; font-size: .8rem; }
+.form-commentaire { display: flex; gap: .4rem; flex-wrap: wrap; }
+.form-commentaire input { flex: 1 1 14rem; }
+.pari.flash { border: 2px solid var(--or); box-shadow: 0 0 0 3px #feecc2; }
+.bandeau-flash { margin: -1rem -1.1rem .8rem; padding: .45rem 1.1rem; background: #feecc2; color: var(--or);
+  border-radius: var(--rayon) var(--rayon) 0 0; font-weight: 600; }
+.bandeau-flash b { font-variant-numeric: tabular-nums; }
+.pari.flash.urgent .bandeau-flash { background: var(--rouge); color: #fff; animation: pulse 1s infinite; }
+@media (prefers-reduced-motion: reduce) { .pari.flash.urgent .bandeau-flash { animation: none; } }
+.evt-flash { font-weight: 600; }
+.lancer-flash { border-color: var(--or); margin-bottom: 1rem; }
+input.petit-moyen { width: 9rem; }
+
 .toast {
   position: fixed; bottom: 1.2rem; left: 50%; transform: translateX(-50%);
   background: var(--texte); color: #fff; padding: .7rem 1.1rem; border-radius: 6px;

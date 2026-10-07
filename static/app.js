@@ -22,6 +22,7 @@ let onglet = "ouverts";
 let ongletAdmin = "paris";
 let derniereCle = null; // dernier événement affiché dans le bandeau
 let modeClassement = "joueurs";
+let decalageHorloge = 0; // heure du serveur − heure du navigateur (mesurée à chaque état reçu)
 let historiqueJoueurs = null, chargementStats = false; // courbes des joueurs (onglet Statistiques)
 const historiquesCotes = {}; // courbes des cotes, par pari
 
@@ -71,6 +72,7 @@ async function rafraichir() {
     if (r.inchange) return;
     const premier = !etat;
     etat = r;
+    decalageHorloge = new Date(r.maintenant) - Date.now(); // pour les comptes à rebours
     rendre();
     if (premier) suivreAncre();
   } catch {
@@ -107,6 +109,8 @@ function rendre() {
   $("#capital").textContent = nb(etat.capital);
   $("#amorce").textContent = nb(etat.amorce);
   $("#onglet-admin").hidden = !etat.admin && onglet !== "admin";
+  $("#onglet-profil").hidden = !etat.moi;
+  if (etat.moi && onglet === "inscription") onglet = "profil"; // inscription réussie
   $("#admin-connexion").hidden = etat.admin;
   $("#admin-contenu").hidden = !etat.admin;
   rendreCompte();
@@ -125,6 +129,8 @@ function rendre() {
   patch($("#vue-ouverts"), listeParis(actifs, "Aucun pari en cours pour l'instant."));
   patch($("#vue-clos"), listeParis(clos, "Aucun pari clôturé pour l'instant."));
   patch($("#vue-mes-mises"), vueMesMises());
+  patch($("#vue-profil"), vueProfil());
+  patch($("#vue-inscription"), vueInscription());
   patch($("#vue-calendrier"), vueCalendrier());
   patch($("#classement"), vueClassement());
   patch($("#fil"), vueFil());
@@ -138,6 +144,8 @@ function rendre() {
   }
   $("#categories").innerHTML = [...new Set(etat.paris.map((p) => p.categorie).filter(Boolean))]
     .map((c) => `<option value="${esc(c)}">`).join("");
+  $("#liste-equipes").innerHTML = etat.equipes.map((e) => `<option value="${esc(e.nom)}">`).join("");
+  majComptesARebours();
   majGainsPotentiels();
   majCourbes();
   majStats();
@@ -166,14 +174,13 @@ function rendreCompte() {
          <div class="bloc"><small>En jeu</small><b>${nb(moi.en_jeu)}</b></div>
          <div class="bloc"><small>Rang</small><b>${moi.rang}<sup>${moi.rang === 1 ? "er" : "e"}</sup></b></div>
        </div>
-       <div><b>${esc(moi.pseudo)}</b><br><button class="lien" data-action="deconnexion">Déconnexion</button></div>`
+       <div><button class="lien pseudo" data-onglet="profil" title="Mon profil"><b>${esc(moi.pseudo)}</b> ${icones(moi.trophees)}</button>
+         <br><button class="lien" data-action="deconnexion">Déconnexion</button></div>`
     : `<form id="form-joueur">
          <input data-k="pseudo" name="pseudo" placeholder="Pseudo" autocomplete="username" required>
          <input data-k="pin" name="pin" type="password" placeholder="Code secret" autocomplete="current-password" required>
-         ${etat.invitation ? `<input data-k="invitation" name="invitation" placeholder="Code d'invitation (inscription)" autocomplete="off">` : ""}
-         ${etat.equipes.length ? `<select data-k="equipe" name="equipe" title="Votre équipe (inscription)">${optionsEquipes(null, "Équipe (inscription)…")}</select>` : ""}
-         <button type="submit" data-mode="connexion">Se connecter</button>
-         <button type="submit" data-mode="inscription" class="secondaire">Créer un compte</button>
+         <button type="submit">Se connecter</button>
+         <button type="button" class="secondaire" data-onglet="inscription">Créer un compte</button>
        </form>`;
   patch($("#compte"), html);
 }
@@ -209,6 +216,12 @@ function texteEvenement(e) {
         + (e.nb_tardives ? ` ${pluriel(e.nb_tardives, "mise tardive")} remboursée${e.nb_tardives > 1 ? "s" : ""}.` : "") + "</span>";
     case "annule":
       return `↩️ <b>${esc(e.pari)}</b> annulé, mises remboursées.`;
+    case "flash":
+      return `<span class="evt-flash">⚡ <b>Pari flash</b> : « ${esc(e.pari)} » — mises jusqu'à ${esc(fmtHeure(e.date_limite))}</span>`;
+    case "commentaire":
+      return `💬 <b>${esc(e.joueur)}</b> sur « ${esc(e.pari)} » : ${esc(e.texte.length > 90 ? e.texte.slice(0, 90) + "…" : e.texte)}`;
+    case "trophee":
+      return `🏆 <b>${esc(e.joueur)}</b> obtient le trophée ${e.icone} <b>${esc(e.trophee)}</b>`;
     case "pari":
       return e.joueur ? `🆕 <b>${esc(e.joueur)}</b> propose un pari : « ${esc(e.pari)} »` : `🆕 Nouveau pari : « ${esc(e.pari)} »`;
     case "joueur":
@@ -261,7 +274,28 @@ function badgeStatut(p) {
 
 function listeParis(paris, messageVide) {
   if (!paris.length) return `<p class="vide">${messageVide}</p>`;
+  const enTete = (p) => (p.flash && p.accepte_mises ? 0 : 1);
+  paris = [...paris].sort((a, b) => enTete(a) - enTete(b)); // tri stable : l'ordre du serveur est conservé
   return `<div class="liste-paris">${paris.map(cartePari).join("")}</div>`;
+}
+
+const fmtHeure = (s) => s ? new Date(s).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) : "";
+const icones = (codes) => (codes || []).map((c) => `<span class="trophee" title="${esc(etat.trophees[c].nom)} : ${esc(etat.trophees[c].condition)}">${etat.trophees[c].icone}</span>`).join("");
+
+/** Commentaires d'un pari (« exposé des motifs ») et formulaire pour en ajouter un. */
+function blocCommentaires(p) {
+  const liste = p.commentaires.map((c) => `
+    <li><b>${esc(c.joueur)}</b> <time>${fmtDate(c.date)}</time>
+      ${etat.admin || c.joueur_id === etat.moi?.id ? `<button class="lien" data-action="supprimer-commentaire" data-commentaire="${c.id}" title="Supprimer">✕</button>` : ""}
+      <div>${esc(c.texte)}</div></li>`).join("");
+  return `
+    <details class="commentaires" data-k="cm-${p.id}">
+      <summary>💬 Exposé des motifs${p.commentaires.length ? ` (${p.commentaires.length})` : ""}</summary>
+      ${liste ? `<ul>${liste}</ul>` : `<p class="aide">Aucun commentaire. Justifiez votre pari, ou chambrez les autres !</p>`}
+      ${etat.moi ? `<form class="form-commentaire" data-pari-commentaire="${p.id}">
+        <input name="texte" data-k="ct-${p.id}" maxlength="280" placeholder="Votre commentaire (280 caractères)" required>
+        <button type="submit" class="secondaire">Publier</button></form>` : `<p class="aide">Connectez-vous pour commenter.</p>`}
+    </details>`;
 }
 
 function cartePari(p) {
@@ -270,8 +304,10 @@ function cartePari(p) {
   if (p.clos_le) meta.push(`Clôturé le ${fmtDate(p.clos_le)}`);
   meta.push(`${pluriel(p.nb_joueurs, "joueur")} · cagnotte ${nb(p.total_mise)} 🪙`);
   const etape = etat.etapes.find((e) => e.id === p.etape_id);
+  const flashOuvert = p.flash && p.accepte_mises;
   return `
-    <article class="carte pari" id="pari-${p.id}">
+    <article class="carte pari${flashOuvert ? " flash" : ""}" id="pari-${p.id}">
+      ${flashOuvert ? `<div class="bandeau-flash">⚡ Pari flash · mises closes dans <b data-fin="${esc(p.date_limite)}"></b></div>` : ""}
       <div class="pari-entete">
         ${p.categorie ? `<span class="badge">${esc(p.categorie)}</span>` : ""}
         ${p.type === "estimation" ? `<span class="badge estimation">Chiffre</span>` : ""}
@@ -287,6 +323,7 @@ function cartePari(p) {
       ${p.nb_tardives ? `<p class="aide">⏱ ${pluriel(p.nb_tardives, "mise placée")} après le résultat (connu le ${fmtDate(p.realise_le)}) : remboursée${p.nb_tardives > 1 ? "s" : ""}, hors cagnotte.</p>` : ""}
       ${p.type === "choix" ? `<details class="courbe-cotes" data-k="hc-${p.id}" data-courbe-pari="${p.id}">
         <summary>📈 Évolution des cotes</summary><div class="graphique"></div></details>` : ""}
+      ${blocCommentaires(p)}
     </article>`;
 }
 
@@ -367,9 +404,7 @@ function majGainsPotentiels() {
 
 function vueMesMises() {
   if (!etat.moi) return `<p class="vide">Connectez-vous ou créez un compte (en haut à droite) pour parier.</p>`;
-  const equipe = etat.equipes.length ? `<div class="carte ligne-form mon-equipe">
-      <label>Mon équipe <select id="mon-equipe" data-k="mon-equipe">${optionsEquipes(etat.moi.equipe_id)}</select></label>
-      <span class="aide">Les équipes sont classées à la moyenne de leurs joueurs.</span></div>` : "";
+  const equipe = "";
   const mises = etat.mes_mises;
   if (!mises.length) return equipe + `<p class="vide">Vous n'avez encore rien misé. Rendez-vous dans « Paris en cours » !</p>`;
   const lignes = mises.map((m) => {
@@ -410,13 +445,98 @@ function vueClassement() {
   const lignes = etat.classement.map((j) => `
     <tr class="${etat.moi && j.id === etat.moi.id ? "moi" : ""}">
       <td class="rang">${medailles[j.rang] || j.rang}</td>
-      <td>${esc(j.pseudo)}${j.equipe_id ? ` <small class="aide">${esc(nomsEquipes[j.equipe_id] ?? "")}</small>` : ""}</td>
+      <td>${esc(j.pseudo)} ${icones(j.trophees)}${j.equipe_id ? ` <small class="aide">${esc(nomsEquipes[j.equipe_id] ?? "")}</small>` : ""}</td>
       <td class="nombre" title="Disponible : ${nb(j.disponible)} · En jeu : ${nb(j.en_jeu)}">${nb(j.total)}</td>
       <td class="nombre aide">${nb(j.en_jeu)}</td>
     </tr>`).join("");
   return `<div class="tableau-conteneur"><table>
     <thead><tr><th></th><th>Joueur</th><th class="nombre">🪙 Total</th><th class="nombre">En jeu</th></tr></thead>
     <tbody>${lignes}</tbody></table></div>`;
+}
+
+// ---------------------------------------------------------------------------
+// Inscription et « Mon profil »
+// ---------------------------------------------------------------------------
+
+const aideEquipe = `<span class="aide">Choisissez une équipe de la liste, ou tapez un nouveau nom pour la créer
+  (« DG75 », « dg 75 » et « DG-75 » désignent la même équipe). Les équipes sont classées à la moyenne de leurs joueurs.</span>`;
+
+function vueInscription() {
+  if (etat.moi) return `<p class="vide">Vous êtes connecté en tant que ${esc(etat.moi.pseudo)}.</p>`;
+  return `
+    <div class="carte">
+      <h2>Créer un compte</h2>
+      <form id="form-inscription" class="form-pari">
+        <div class="deux-colonnes">
+          <label>Pseudo<input name="pseudo" data-k="i-pseudo" minlength="2" maxlength="30" autocomplete="username" required></label>
+          <label>Code secret (4 caractères minimum)<input name="pin" data-k="i-pin" type="password" minlength="4" maxlength="64" autocomplete="new-password" required></label>
+        </div>
+        ${etat.invitation ? `<label>Code d'invitation<input name="invitation" data-k="i-invitation" autocomplete="off" required
+          placeholder="Communiqué par l'organisateur du jeu"></label>` : ""}
+        <label>Équipe (facultatif)<input name="equipe" data-k="i-equipe" list="liste-equipes" maxlength="40" autocomplete="off"
+          placeholder="${etat.equipes.length ? "Ex. : " + esc(etat.equipes.slice(0, 2).map((e) => e.nom).join(", ")) : "Ex. : DG75"}"></label>
+        ${aideEquipe}
+        <div><button type="submit">Créer mon compte et recevoir ${nb(etat.capital)} 🪙</button></div>
+      </form>
+    </div>`;
+}
+
+function vueProfil() {
+  const moi = etat.moi;
+  if (!moi) return `<p class="vide">Connectez-vous pour accéder à votre profil.</p>`;
+  const equipe = etat.equipes.find((e) => e.id === moi.equipe_id);
+  const rangEquipe = etat.classement_equipes.find((e) => e.id === moi.equipe_id);
+  const coequipiers = etat.classement.filter((j) => j.equipe_id === moi.equipe_id && moi.equipe_id);
+  const catalogue = Object.entries(etat.trophees).map(([code, t]) => {
+    const date = etat.mes_trophees[code];
+    return `<li class="${date ? "obtenu" : ""}"><span class="icone">${t.icone}</span>
+      <div><b>${esc(t.nom)}</b><br><span class="aide">${esc(t.condition)}${date ? ` · obtenu le ${fmtDate(date)}` : ""}</span></div></li>`;
+  }).join("");
+  return `
+    <div class="carte">
+      <h2>${esc(moi.pseudo)} ${icones(moi.trophees)}</h2>
+      <p>${moi.rang}<sup>${moi.rang === 1 ? "er" : "e"}</sup> sur ${etat.classement.length} · ${nb(moi.total)} 🪙
+        (${nb(moi.disponible)} disponibles, ${nb(moi.en_jeu)} en jeu) · ${pluriel(moi.paris_gagnes, "pari gagné")}</p>
+    </div>
+    <div class="carte">
+      <h2>Mon équipe</h2>
+      <p>${equipe ? `<b>${esc(equipe.nom)}</b>${rangEquipe ? ` · ${rangEquipe.rang}<sup>${rangEquipe.rang === 1 ? "re" : "e"}</sup> équipe sur
+        ${etat.classement_equipes.length}, moyenne ${nb(rangEquipe.moyenne)} 🪙` : ""}` : "Vous n'êtes dans aucune équipe."}</p>
+      ${coequipiers.length > 1 ? `<p class="aide">Avec : ${coequipiers.filter((j) => j.id !== moi.id).map((j) => esc(j.pseudo)).join(", ")}</p>` : ""}
+      <form id="form-profil" class="ligne-form">
+        <input name="equipe" data-k="p-equipe" list="liste-equipes" maxlength="40" autocomplete="off"
+          placeholder="${equipe ? "Changer d'équipe…" : "Rejoindre ou créer une équipe…"}">
+        <button type="submit">${equipe ? "Changer" : "Rejoindre"}</button>
+        ${equipe ? `<button type="button" class="lien" data-action="quitter-equipe">Quitter l'équipe</button>` : ""}
+      </form>
+      ${aideEquipe}
+    </div>
+    <div class="carte">
+      <h2>Trophées</h2>
+      <ul class="trophees">${catalogue}</ul>
+    </div>`;
+}
+
+// ---------------------------------------------------------------------------
+// Paris flash : compte à rebours
+// ---------------------------------------------------------------------------
+
+
+/** Met à jour les comptes à rebours ; recharge l'état quand l'un d'eux arrive à zéro. */
+function majComptesARebours() {
+  const maintenant = Date.now() + decalageHorloge;
+  let flashOuvert = false, termine = false;
+  $$("[data-fin]").forEach((el) => {
+    const reste = Math.max(0, Math.round((new Date(el.dataset.fin) - maintenant) / 1000));
+    el.textContent = reste >= 60 ? `${Math.floor(reste / 60)} min ${String(reste % 60).padStart(2, "0")} s` : `${reste} s`;
+    el.closest(".pari")?.classList.toggle("urgent", reste <= 60);
+    if (reste > 0) flashOuvert = true; else termine = true;
+  });
+  document.title = (flashOuvert ? "⚡ " : "") + "Les paris du PLF";
+  if (termine && !majComptesARebours.enCours) {
+    majComptesARebours.enCours = true;
+    setTimeout(() => { majComptesARebours.enCours = false; rafraichir(); }, 1500);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -552,7 +672,19 @@ function vueAdminParis() {
         <button class="secondaire" data-action="admin-reouverture">Revenir sur ${p.statut === "annule" ? "l'annulation" : "la clôture"}</button>
       </div>
     </article>`);
-  return barre + (cartes.join("") || `<p class="vide">Aucun pari en cours.</p>`)
+  const flash = `
+    <div class="carte lancer-flash">
+      <h2>⚡ Lancer un pari flash</h2>
+      <div class="actions">
+        <input data-k="fl-titre" maxlength="200" placeholder="Ex. : Le ministre est-il interrompu dans les 5 minutes ?" class="large">
+        <input data-k="fl-issues" maxlength="200" value="Oui / Non" title="Issues séparées par « / »" class="petit-moyen">
+        <select data-k="fl-minutes">${[2, 5, 10, 15, 30, 60].map((m) => `<option value="${m}"${m === 10 ? " selected" : ""}>${m} min</option>`).join("")}</select>
+        <button data-action="admin-flash">⚡ Lancer</button>
+      </div>
+      <p class="aide">Ouvert tout de suite, avec un compte à rebours bien visible et une annonce dans le bandeau.
+        Pensez à le clôturer rapidement, avec l'heure du résultat.</p>
+    </div>`;
+  return flash + barre + (cartes.join("") || `<p class="vide">Aucun pari en cours.</p>`)
     + (cartesClos.length ? `<h2 class="titre-section">Paris clôturés</h2>${cartesClos.join("")}` : "");
 }
 
@@ -907,6 +1039,19 @@ function suivreAncre() {
   setTimeout(() => carte.classList.remove("surligne"), 2500);
 }
 
+async function changerEquipe(nom) {
+  try {
+    const r = await api("profil", { body: { equipe: nom } });
+    toast(!r.equipe ? "Vous n'êtes plus dans une équipe." : r.equipe_creee ? `Équipe « ${r.equipe} » créée : vous en êtes le premier membre !`
+      : `Vous faites maintenant partie de « ${r.equipe} ».`, "succes");
+    const champ = $('[data-k="p-equipe"]');
+    if (champ) champ.value = "";
+    await rafraichir();
+  } catch (e) {
+    toast(e.message, "erreur");
+  }
+}
+
 async function copierLien(id) {
   const url = lienPari(id);
   try {
@@ -926,13 +1071,28 @@ document.addEventListener("submit", async (ev) => {
   ev.preventDefault();
 
   if (form.id === "form-joueur") {
-    const mode = ev.submitter?.dataset.mode || "connexion";
-    const body = { pseudo: form.pseudo.value, pin: form.pin.value };
-    if (mode === "inscription") {
-      if (form.invitation) body.invitation = form.invitation.value;
-      if (form.equipe) body.equipe_id = form.equipe.value;
+    await action(api("connexion", { body: { pseudo: form.pseudo.value, pin: form.pin.value } }), "Connecté.");
+  } else if (form.id === "form-inscription") {
+    const body = { pseudo: form.pseudo.value, pin: form.pin.value, equipe: form.equipe.value };
+    if (form.invitation) body.invitation = form.invitation.value;
+    try {
+      const r = await api("inscription", { body });
+      toast(`Bienvenue ! ${nb(etat.capital)} deniers publics vous attendent.`
+        + (r.equipe ? (r.equipe_creee ? ` Équipe « ${r.equipe} » créée.` : ` Vous rejoignez « ${r.equipe} ».`) : ""), "succes");
+      onglet = "ouverts";
+      await rafraichir();
+    } catch (e) {
+      toast(e.message, "erreur");
     }
-    await action(api(mode, { body }), mode === "inscription" ? `Bienvenue ! ${etat.capital} deniers publics vous attendent.` : "Connecté.");
+  } else if (form.id === "form-profil") {
+    await changerEquipe(form.equipe.value);
+  } else if (form.classList.contains("form-commentaire")) {
+    const champ = form.texte, texte = champ.value;
+    champ.value = ""; // vidé avant le rafraîchissement, qui conserve les saisies en cours
+    if (!(await action(api("commentaires", { body: { pari_id: Number(form.dataset.pariCommentaire), texte } }), "Commentaire publié."))) {
+      const nouveau = $(`[data-k="ct-${form.dataset.pariCommentaire}"]`);
+      if (nouveau) nouveau.value = texte;
+    }
   } else if (form.classList.contains("miser-estimation")) {
     const montant = parseInt(form.montant.value, 10);
     if (!(montant > 0)) return toast("Indiquez une mise d'au moins 1 denier public.", "erreur");
@@ -997,6 +1157,27 @@ document.addEventListener("click", async (ev) => {
     case "copier-lien":
       await copierLien(bouton.dataset.pariLien);
       break;
+    case "quitter-equipe":
+      await changerEquipe("");
+      break;
+    case "supprimer-commentaire":
+      if (!confirm("Supprimer ce commentaire ?")) return;
+      await action(api(`commentaires/${bouton.dataset.commentaire}/suppression`, { method: "POST" }), "Commentaire supprimé.");
+      break;
+    case "admin-flash": {
+      const titre = champ("fl-titre");
+      const body = { titre: titre.value, minutes: Number(champ("fl-minutes").value),
+                     issues: champ("fl-issues").value.split("/").map((i) => i.trim()).filter(Boolean) };
+      try {
+        const r = await api("admin/flash", { body });
+        toast(`⚡ Pari flash lancé : mises jusqu'à ${fmtHeure(r.date_limite)}.`, "succes");
+        titre.value = "";
+        await rafraichir();
+      } catch (e) {
+        toast(e.message, "erreur");
+      }
+      break;
+    }
     case "retirer-issue":
       bouton.closest(".ligne-issue").remove();
       break;
@@ -1183,9 +1364,7 @@ document.addEventListener("input", (ev) => {
 });
 
 document.addEventListener("change", async (ev) => {
-  if (ev.target.id === "mon-equipe") {
-    await action(api("profil", { body: { equipe_id: ev.target.value } }), ev.target.value ? "Équipe enregistrée." : "Vous n'êtes plus dans une équipe.");
-  } else if (ev.target.id === "stats-comparer") {
+  if (ev.target.id === "stats-comparer") {
     majStats();
   } else if (ev.target.name === "type" && ev.target.closest("#form-pari")) {
     afficherTypePari();
@@ -1220,4 +1399,5 @@ window.addEventListener("hashchange", () => {
 reinitialiserFormPari();
 rafraichir();
 setInterval(() => { if (!document.hidden) rafraichir(); }, RAFRAICHISSEMENT_MS);
+setInterval(majComptesARebours, 1000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) rafraichir(); });

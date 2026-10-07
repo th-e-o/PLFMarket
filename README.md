@@ -35,7 +35,7 @@ racine identique à `FTP_DOSSIER`.
 
 ## Administration
 
-Adresse du site suivie de `#admin`, mot de passe `PLF_ADMIN_PASSWORD`. Quatre sous-onglets :
+Adresse du site suivie de `#admin`, mot de passe `PLF_ADMIN_PASSWORD`. Quatre sous-onglets (l'administration peut aussi supprimer n'importe quel commentaire) :
 
 - **Paris** : « Tout suspendre » (coupe d'un coup les mises de tous les paris ouverts, en séance) puis
   « Rouvrir » (seulement les paris ainsi suspendus) ; modifier un pari (textes, date limite, étape du
@@ -49,6 +49,25 @@ Adresse du site suivie de `#admin`, mot de passe `PLF_ADMIN_PASSWORD`. Quatre so
   chaque pari peut être rattaché à une étape.
 - **Réglages** : capital de départ et amorce (priment sur `PLF_CAPITAL` et `PLF_AMORCE`), code
   d'invitation (exigé à l'inscription s'il est défini), équipes, sauvegarde téléchargeable.
+
+## Joueurs
+
+- **Inscription** (bouton « Créer un compte ») : pseudo, code secret, code d'invitation s'il est défini, et
+  équipe facultative : un nom existant la rejoint (casse, accents, espaces et ponctuation ignorés :
+  « dg 75 » = « DG75 »), un nouveau nom la crée.
+- **Mon profil** (clic sur son pseudo) : rang, équipe (rejoindre, créer, quitter), trophées obtenus.
+- **Commentaires** (« Exposé des motifs ») sous chaque pari : 280 caractères, 5 par 2 minutes ;
+  suppression par l'auteur ou l'administration.
+- **Trophées** : 🔮 Nostradamus (mise gagnée à ×5 ou plus), 🔥 En série / 🧊 Cassandre (3 paris gagnés /
+  perdus d'affilée), 🎲 49.3 (tout son solde misé d'un coup), ⚡ Éclair (pari flash gagné), 🎯 Dans le mille
+  (valeur exacte d'un pari chiffré), 📜 Rapporteur général (pari proposé ayant attiré 5 joueurs).
+  Calculés à partir de l'historique, annoncés dans le fil.
+
+## Paris flash
+
+Admin → Paris → « Lancer un pari flash » : intitulé, issues (« Oui / Non » par défaut), durée de 2 à
+60 minutes. Le pari s'affiche en tête avec un compte à rebours, est annoncé dans le bandeau, et se ferme
+seul à l'échéance (arrondie à la minute supérieure). Il se clôture ensuite comme les autres.
 
 ## Règles d'équité et sécurité
 

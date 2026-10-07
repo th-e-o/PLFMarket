@@ -30,6 +30,7 @@
         <button data-onglet="ouverts" class="actif">Paris en cours</button>
         <button data-onglet="clos">Paris clôturés</button>
         <button data-onglet="mes-mises">Mes mises</button>
+        <button data-onglet="profil" id="onglet-profil" hidden>Mon profil</button>
         <button data-onglet="calendrier">Calendrier</button>
         <button data-onglet="stats">Statistiques</button>
         <button data-onglet="proposer">+ Proposer un pari</button>
@@ -39,6 +40,8 @@
       <div id="vue-ouverts" class="vue"></div>
       <div id="vue-clos" class="vue" hidden></div>
       <div id="vue-mes-mises" class="vue" hidden></div>
+      <div id="vue-profil" class="vue" hidden></div>
+      <div id="vue-inscription" class="vue" hidden></div>
       <div id="vue-calendrier" class="vue" hidden></div>
       <div id="vue-stats" class="vue" hidden>
         <div class="carte">
@@ -86,6 +89,7 @@
             <button type="submit">Publier le pari</button>
           </form>
           <datalist id="categories"></datalist>
+          <datalist id="liste-equipes"></datalist>
         </div>
       </div>
 
@@ -151,7 +155,9 @@
           <li>Paris sur un chiffre : chacun donne une estimation (secrète jusqu'à la clôture) et sa mise ;
             l'estimation la plus proche emporte la cagnotte et l'apport de la banque (partage au prorata des
             mises en cas d'égalité).</li>
-          <li>Chacun peut proposer des paris (5 par jour au plus).</li>
+          <li>Chacun peut proposer des paris (5 par jour au plus) et commenter les paris.</li>
+          <li>⚡ Paris flash : lancés pendant les séances, ouverts quelques minutes seulement.</li>
+          <li>Des trophées récompensent les exploits (et les déboires) : la liste est dans « Mon profil ».</li>
           <li>Les gains sont immédiatement réinvestissables sur les paris encore ouverts.</li>
           <li>Pari annulé : les mises sont remboursées.</li>
           <li>Le classement compte les deniers publics disponibles + ceux engagés sur des paris en cours.
