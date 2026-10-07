@@ -11,7 +11,7 @@ header('Cache-Control: no-store');
 
 const STATUTS_ACTIFS = ['ouvert', 'suspendu'];
 
-// Paris créés à l'installation.
+// Paris d'illustration, créés à l'installation si 'exemples' => true (retirés en production par la version 5).
 const PARIS_EXEMPLES = [
     ['Procédure', "Le Gouvernement engagera-t-il sa responsabilité (art. 49.3) sur le PLF ?",
      "Sur au moins une partie du texte, à n'importe quelle lecture.", ['Oui', 'Non']],
@@ -42,7 +42,7 @@ const PARIS_V2 = [
      "Déficit public prévu par la loi de finances initiale promulguée.", ['Oui', 'Non']],
 ];
 
-const VERSION_BASE = 4;
+const VERSION_BASE = 5;
 const PROPOSITIONS_PAR_JOUR = 5;
 
 const SCHEMA_SQLITE = <<<SQL
@@ -214,7 +214,7 @@ function migrer(PDO $pdo, int $version): void
         foreach (array_filter(array_map('trim', explode(';', est_sqlite() ? SCHEMA_SQLITE : SCHEMA_MYSQL))) as $ordre) {
             $pdo->exec($ordre);
         }
-        if (($pdo->query('SELECT COUNT(*) FROM paris')->fetchColumn() == 0) && (CONFIG['exemples'] ?? true)) {
+        if (($pdo->query('SELECT COUNT(*) FROM paris')->fetchColumn() == 0) && (CONFIG['exemples'] ?? false)) {
             foreach (PARIS_EXEMPLES as $p) inserer_pari($pdo, ...$p);
         }
     }
@@ -236,6 +236,17 @@ function migrer(PDO $pdo, int $version): void
     }
     if ($version < 4) { // cotes ajustées par l'administration
         $pdo->exec('ALTER TABLE issues ADD COLUMN poids_banque REAL');
+    }
+    if ($version < 5 && !(CONFIG['exemples'] ?? false)) { // mise en production : retrait des paris d'illustration sans mise
+        $retrait = $pdo->prepare('SELECT id FROM paris WHERE titre = ? AND auteur_id IS NULL
+                                  AND NOT EXISTS (SELECT 1 FROM mises WHERE pari_id = paris.id)');
+        foreach (PARIS_EXEMPLES as [, $titre]) {
+            $retrait->execute([$titre]);
+            foreach ($retrait->fetchAll(PDO::FETCH_COLUMN) as $id) {
+                $pdo->prepare('DELETE FROM issues WHERE pari_id = ?')->execute([$id]);
+                $pdo->prepare('DELETE FROM paris WHERE id = ?')->execute([$id]);
+            }
+        }
     }
     $pdo->exec("DELETE FROM reglages WHERE cle = 'version'");
     $pdo->prepare("INSERT INTO reglages (cle, valeur) VALUES ('version', ?)")->execute([(string)VERSION_BASE]);

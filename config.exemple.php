@@ -19,8 +19,8 @@ return [
     //     'password' => 'VOTRE_MOT_DE_PASSE',
     // ],
 
-    // Crée les 7 paris d'exemple lors de la première installation.
-    'exemples' => true,
+    // true : crée 7 paris d'illustration à l'installation (pour une démonstration). En production : false.
+    'exemples' => false,
 
     // true : affiche le détail des erreurs serveur (à désactiver en production).
     'debug' => false,

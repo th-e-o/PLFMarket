@@ -9,7 +9,7 @@ $config = [
     'admin_password' => $admin,
     'capital' => (int)(getenv('PLF_CAPITAL') ?: 1000),
     'amorce' => (int)(getenv('PLF_AMORCE') !== false && getenv('PLF_AMORCE') !== '' ? getenv('PLF_AMORCE') : 100),
-    'exemples' => true,
+    'exemples' => false,
     'debug' => false,
 ];
 if ($dsn = getenv('PLF_DB_DSN')) { // facultatif : MySQL au lieu de SQLite
