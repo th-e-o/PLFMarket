@@ -42,7 +42,7 @@ const PARIS_V2 = [
      "Déficit public prévu par la loi de finances initiale promulguée.", ['Oui', 'Non']],
 ];
 
-const VERSION_BASE = 10;
+const VERSION_BASE = 11;
 const BONUS_DELAI = 86400; // un bonus quotidien toutes les 24 heures (glissantes)
 const PROPOSITIONS_PAR_JOUR = 5;
 const DUREES_FLASH = [2, 5, 10, 15, 30, 60]; // minutes
@@ -374,6 +374,9 @@ function migrer(PDO $pdo, int $version): void
         ] as $ordre) {
             $pdo->exec($ordre);
         }
+    }
+    if ($version < 11) { // mots-clés qui rattachent les articles de presse à un pari
+        $pdo->exec('ALTER TABLE paris ADD COLUMN mots_cles TEXT');
     }
     $pdo->exec("DELETE FROM reglages WHERE cle IN ('version', 'revision')");
     $pdo->prepare("INSERT INTO reglages (cle, valeur) VALUES ('version', ?)")->execute([(string)VERSION_BASE]);
@@ -710,12 +713,17 @@ function lire_equipe(mixed $v): ?int
  */
 function cle_equipe(string $nom): string
 {
-    $s = strtr($nom, ['À' => 'a', 'Â' => 'a', 'Ä' => 'a', 'à' => 'a', 'â' => 'a', 'ä' => 'a', 'Ç' => 'c', 'ç' => 'c',
+    return strtolower((string)preg_replace('/[^\p{L}\p{N}]+/u', '', sans_accents($nom)));
+}
+
+/** Lettres accentuées du français remplacées par leur lettre de base minuscule (« É » → « e »), sans mbstring. */
+function sans_accents(string $s): string
+{
+    return strtr($s, ['À' => 'a', 'Â' => 'a', 'Ä' => 'a', 'à' => 'a', 'â' => 'a', 'ä' => 'a', 'Ç' => 'c', 'ç' => 'c',
         'É' => 'e', 'È' => 'e', 'Ê' => 'e', 'Ë' => 'e', 'é' => 'e', 'è' => 'e', 'ê' => 'e', 'ë' => 'e',
         'Î' => 'i', 'Ï' => 'i', 'î' => 'i', 'ï' => 'i', 'Ô' => 'o', 'Ö' => 'o', 'ô' => 'o', 'ö' => 'o',
         'Ù' => 'u', 'Û' => 'u', 'Ü' => 'u', 'ù' => 'u', 'û' => 'u', 'ü' => 'u', 'Ÿ' => 'y', 'ÿ' => 'y',
         'Œ' => 'oe', 'œ' => 'oe', 'Æ' => 'ae', 'æ' => 'ae']);
-    return strtolower((string)preg_replace('/[^\p{L}\p{N}]+/u', '', $s));
 }
 
 /** Équipe existante dont le nom correspond (voir cle_equipe), ou null. */
@@ -897,6 +905,7 @@ function route_etat(): array
             'description' => $p['description'],
             'categorie' => $p['categorie'],
             'unite' => (string)$p['unite'],
+            'mots_cles' => (string)$p['mots_cles'],
             'etape_id' => $p['etape_id'] === null ? null : (int)$p['etape_id'],
             'auteur' => $p['auteur'],
             'flash' => (bool)$p['flash'],
@@ -1734,6 +1743,11 @@ function route_admin_modifier(int $pariId): array
         if (array_key_exists('etape_id', $d)) {
             q('UPDATE paris SET etape_id = ? WHERE id = ?', [lire_etape($d['etape_id']), $pariId]);
         }
+        if (array_key_exists('mots_cles', $d)) {
+            $mots = trim((string)$d['mots_cles']);
+            if (longueur($mots) > 300) throw new ErreurApi('Les mots-clés sont limités à 300 caractères.');
+            q('UPDATE paris SET mots_cles = ? WHERE id = ?', [$mots === '' ? null : $mots, $pariId]);
+        }
         if (array_key_exists('unite', $d)) {
             $unite = trim((string)$d['unite']);
             if (longueur($unite) > 30) throw new ErreurApi("L'unité est limitée à 30 caractères.");
@@ -1991,6 +2005,12 @@ function route_admin_reglages(): array
             q("DELETE FROM reglages WHERE cle = 'code_invitation'");
             if ($code !== '') q("INSERT INTO reglages (cle, valeur) VALUES ('code_invitation', ?)", [$code]);
         }
+        if (array_key_exists('actu_recherche', $d)) {
+            $recherche = trim((string)$d['actu_recherche']);
+            if (longueur($recherche) > 300) throw new ErreurApi('La recherche est limitée à 300 caractères.');
+            q("DELETE FROM reglages WHERE cle = 'actu_recherche'");
+            if ($recherche !== '') q("INSERT INTO reglages (cle, valeur) VALUES ('actu_recherche', ?)", [$recherche]);
+        }
         if (array_key_exists('amorce', $d)) {
             foreach (q("SELECT id FROM paris WHERE statut IN ('ouvert', 'suspendu')")->fetchAll(PDO::FETCH_COLUMN) as $id) {
                 capturer_cotes((int)$id);
@@ -2012,6 +2032,8 @@ function donnees_admin(): array
         'bonus_question_defaut' => (int)BONUS_QUESTION_DEFAUT,
         'bonus_question' => bonus_question(),
         'amorce_defaut' => (int)AMORCE_DEFAUT,
+        'actu_recherche' => actu_recherche(),
+        'actu_recherche_defaut' => actu_recherche_defaut(),
         'mises' => array_map(fn($m) => [
             'id' => (int)$m['id'], 'joueur_id' => (int)$m['joueur_id'], 'pari_id' => (int)$m['pari_id'],
             'issue_id' => (int)$m['issue_id'], 'montant' => (int)$m['montant'],
@@ -2192,6 +2214,190 @@ function route_admin_suppression(int $pariId): array
 }
 
 // ---------------------------------------------------------------------------
+// Actualités du PLF : titres de presse lus dans des flux RSS, rattachés aux paris
+// ---------------------------------------------------------------------------
+
+const ACTU_CACHE = __DIR__ . '/data/actualites.json';
+const ACTU_DELAI = 600; // flux relus toutes les 10 minutes au plus, à la demande d'un visiteur
+const ACTU_MAX = 60;    // articles conservés
+const ACTU_JOURS = 21;  // articles plus anciens ignorés
+
+// Flux de presse lus en plus de la recherche Google Actualités : [source, adresse]. Ils couvrent bien
+// d'autres sujets : seuls les articles qui contiennent un des mots de ACTU_SUJET sont retenus.
+const ACTU_FLUX = [
+    ['Public Sénat', 'https://www.publicsenat.fr/feed'],
+    ['LCP', 'https://lcp.fr/rss.xml'],
+    ['franceinfo', 'https://www.francetvinfo.fr/economie/budget.rss'],
+    ['Le Monde', 'https://www.lemonde.fr/economie-francaise/rss_full.xml'],
+    ['Le Figaro', 'https://www.lefigaro.fr/rss/figaro_economie.xml'],
+];
+
+// Mots cherchés sans casse ni accents, mot entier ; « budget 20* » : « budget » suivi d'un mot qui commence par 20.
+const ACTU_SUJET = ['loi de finances', 'lois de finances', 'plf', 'budget 20*', 'budget de l etat', 'budget de la france',
+    'projet de budget', 'budgetaire*', '49 3', 'motion de censure', 'motions de censure', 'loi speciale',
+    'commission des finances', 'rapporteur general'];
+
+// Thèmes reconnus dans l'intitulé et les précisions d'un pari : un article qui en parle y est rattaché.
+// L'administration peut remplacer ces thèmes par ses propres mots-clés (Modifier le pari → Mots-clés presse).
+const ACTU_THEMES = [
+    '49.3' => ['49 3'],
+    'Censure' => ['motion de censure', 'motions de censure', 'censurer le gouvernement', 'renverser le gouvernement',
+                  'chute du gouvernement'],
+    'Conseil constitutionnel' => ['conseil constitutionnel', 'sages'],
+    'CMP' => ['commission mixte paritaire', 'cmp'],
+    'Promulgation' => ['promulg*', 'loi speciale', 'journal officiel'],
+    'Recettes' => ['premiere partie', 'partie recettes', 'volet recettes'],
+    'Déficit' => ['deficit*'],
+    'Amendements' => ['amendement*'],
+    'RN' => ['rn', 'rassemblement national', 'le pen', 'bardella'],
+    'Sénat' => ['senat*'],
+];
+
+/** Recherche Google Actualités : choisie par l'administration, sinon le PLF en cours d'examen. */
+function actu_recherche(): string
+{
+    return reglage_texte('actu_recherche') ?: actu_recherche_defaut();
+}
+
+function actu_recherche_defaut(): string
+{
+    $annee = (int)date('Y') + ((int)date('n') >= 7 ? 1 : 0); // à l'automne, on examine le budget de l'année suivante
+    // le Maroc, l'Algérie et la Tunisie ont aussi leur « PLF »
+    return "\"projet de loi de finances\" OR \"PLF $annee\" OR \"budget $annee\" -Algérie -Maroc -Tunisie -algérien -marocain";
+}
+
+/** Texte ramené à ses mots, sans casse ni accents ni ponctuation, entourés d'espaces : « Le 49.3 ! » → « le 49 3 ». */
+function texte_compare(string $s): string
+{
+    return ' ' . trim((string)preg_replace('/[^a-z0-9]+/', ' ', strtolower(sans_accents($s)))) . ' ';
+}
+
+/** Mots de la liste présents dans un texte préparé par texte_compare() (« promulg* » : tout mot qui commence ainsi). */
+function mots_trouves(string $texte, array $mots): array
+{
+    return array_values(array_filter($mots, function (string $mot) use ($texte) {
+        $m = trim(texte_compare(rtrim($mot, '*')));
+        return $m !== '' && str_contains($texte, ' ' . $m . (str_ends_with($mot, '*') ? '' : ' '));
+    }));
+}
+
+/** Mots qui rattachent un article à un pari, et thèmes reconnus (vides si l'administration a choisi les mots). */
+function mots_du_pari(array $pari): array
+{
+    $choisis = array_values(array_filter(array_map('trim', preg_split('/[,;\n]/', (string)$pari['mots_cles']))));
+    if ($choisis) return ['mots' => $choisis, 'themes' => []];
+    $texte = texte_compare("{$pari['titre']} {$pari['description']}");
+    $themes = array_keys(array_filter(ACTU_THEMES, fn($mots) => mots_trouves($texte, $mots)));
+    return ['mots' => array_merge([], ...array_map(fn($t) => ACTU_THEMES[$t], $themes)), 'themes' => $themes];
+}
+
+/** Texte d'un flux : sans balises ni entités HTML, espaces resserrées, tronqué à $max caractères. */
+function texte_flux(string $s, int $max): string
+{
+    $s = trim((string)preg_replace('/\s+/u', ' ', html_entity_decode(strip_tags($s), ENT_QUOTES | ENT_HTML5, 'UTF-8')));
+    return longueur($s) > $max ? preg_replace('/^(.{' . ($max - 1) . '}).*$/us', '$1', $s) . '…' : $s;
+}
+
+/** Lit tous les flux en parallèle : articles récents sur le budget, sans doublon, du plus récent au plus ancien. */
+function lire_flux(string $recherche): array
+{
+    if (!function_exists('curl_multi_init')) return [];
+    $flux = ACTU_FLUX; // en premier : à titre égal, on garde le lien direct plutôt que celui de Google
+    $flux[] = [null, 'https://news.google.com/rss/search?'
+                     . http_build_query(['q' => $recherche, 'hl' => 'fr', 'gl' => 'FR', 'ceid' => 'FR:fr'])];
+    $multi = curl_multi_init();
+    $requetes = [];
+    foreach ($flux as $n => [, $adresse]) {
+        $requetes[$n] = curl_init($adresse);
+        curl_setopt_array($requetes[$n], [
+            CURLOPT_RETURNTRANSFER => true, CURLOPT_FOLLOWLOCATION => true, CURLOPT_MAXREDIRS => 3,
+            CURLOPT_CONNECTTIMEOUT => 4, CURLOPT_TIMEOUT => 8, CURLOPT_ENCODING => '',
+            CURLOPT_USERAGENT => 'Mozilla/5.0 (compatible; LesParisDuPLF/1.0)',
+        ]);
+        curl_multi_add_handle($multi, $requetes[$n]);
+    }
+    do {
+        $statut = curl_multi_exec($multi, $enCours);
+        if ($enCours) curl_multi_select($multi, 1);
+    } while ($enCours && $statut === CURLM_OK);
+
+    libxml_use_internal_errors(true);
+    $depuis = time() - ACTU_JOURS * 86400;
+    $articles = $vus = [];
+    foreach ($requetes as $n => $requete) {
+        $corps = curl_getinfo($requete, CURLINFO_RESPONSE_CODE) === 200 ? (string)curl_multi_getcontent($requete) : '';
+        curl_multi_remove_handle($multi, $requete);
+        $xml = $corps === '' ? false : simplexml_load_string($corps, 'SimpleXMLElement', LIBXML_NOCDATA | LIBXML_NONET);
+        if (!$xml || !isset($xml->channel->item)) continue;
+        $source = $flux[$n][0];
+        foreach ($xml->channel->item as $item) {
+            $titre = texte_flux((string)$item->title, 300);
+            $lien = trim((string)$item->link);
+            $date = strtotime((string)$item->pubDate);
+            if ($source === null) { // Google Actualités : « Titre - Journal », journal dans <source>, résumé inutile
+                $journal = texte_flux((string)$item->source, 60);
+                if ($journal !== '' && str_ends_with($titre, " - $journal")) $titre = substr($titre, 0, -strlen(" - $journal"));
+                $resume = '';
+            } else {
+                $resume = texte_flux((string)$item->description, 300);
+            }
+            $cle = substr(cle_equipe($titre), 0, 80);
+            if ($titre === '' || isset($vus[$cle]) || !preg_match('#^https?://#i', $lien) || !$date || $date < $depuis) continue;
+            if ($source !== null && !mots_trouves(texte_compare("$titre $resume"), ACTU_SUJET)) continue;
+            $vus[$cle] = true;
+            $articles[] = ['titre' => $titre, 'lien' => $lien, 'source' => $source ?? ($journal ?: 'Presse'),
+                           'date' => date('Y-m-d\TH:i:s', min($date, time())), 'resume' => $resume];
+        }
+    }
+    curl_multi_close($multi);
+    usort($articles, fn($a, $b) => strcmp($b['date'], $a['date']));
+    return array_slice($articles, 0, ACTU_MAX);
+}
+
+/**
+ * Articles en cache (data/actualites.json), relus si le cache a plus de 10 minutes ou si la recherche a changé.
+ * Un seul visiteur relit les flux ; les autres reçoivent pendant ce temps la version précédente. Si aucun flux
+ * ne répond, les articles précédents sont conservés.
+ */
+function actualites_a_jour(): array
+{
+    $recherche = actu_recherche();
+    $cache = is_file(ACTU_CACHE) ? json_decode((string)file_get_contents(ACTU_CACHE), true) : null;
+    if (!is_array($cache)) $cache = ['lu' => 0, 'recherche' => '', 'maj' => null, 'articles' => []];
+    if ($cache['recherche'] === $recherche && time() - $cache['lu'] < ACTU_DELAI) return $cache;
+    $verrou = @fopen(ACTU_CACHE . '.verrou', 'c');
+    if (!$verrou || !flock($verrou, LOCK_EX | LOCK_NB)) return $cache;
+    try {
+        $articles = lire_flux($recherche);
+        $cache = ['lu' => time(), 'recherche' => $recherche, 'maj' => $articles ? maintenant() : $cache['maj'],
+                  'articles' => $articles ?: $cache['articles']];
+        $temporaire = ACTU_CACHE . '.' . bin2hex(random_bytes(4));
+        if (@file_put_contents($temporaire, json_encode($cache, JSON_UNESCAPED_UNICODE)) !== false) {
+            @rename($temporaire, ACTU_CACHE);
+        }
+        return $cache;
+    } finally {
+        flock($verrou, LOCK_UN);
+        fclose($verrou);
+    }
+}
+
+/** Dernières actualités du PLF, chacune avec les paris dont elle parle ; thèmes reconnus pour chaque pari. */
+function route_actualites(): array
+{
+    session_write_close();
+    $cache = actualites_a_jour();
+    $regles = [];
+    foreach (q('SELECT id, titre, description, mots_cles FROM paris') as $p) $regles[(int)$p['id']] = mots_du_pari($p);
+    $articles = array_map(function (array $a) use ($regles) {
+        $texte = texte_compare("{$a['titre']} {$a['resume']}");
+        $a['paris'] = array_keys(array_filter($regles, fn($r) => (bool)mots_trouves($texte, $r['mots'])));
+        return $a;
+    }, $cache['articles']);
+    return ['maj' => $cache['maj'], 'articles' => $articles, 'themes' => array_map(fn($r) => $r['themes'], $regles)];
+}
+
+// ---------------------------------------------------------------------------
 // Aiguillage
 // ---------------------------------------------------------------------------
 
@@ -2212,6 +2418,7 @@ try {
         if ($route === 'historique-joueurs') repondre(route_historique_joueurs());
         if ($route === 'historique-cotes') repondre(route_historique_cotes());
         if ($route === 'fiche') repondre(route_fiche());
+        if ($route === 'actualites') repondre(route_actualites());
         if ($route === 'admin/sauvegarde') {
             exiger_admin();
             route_admin_sauvegarde();

@@ -36,8 +36,8 @@ jobs:
           username: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
           server-dir: ${{ vars.FTP_DOSSIER || 'www/' }}
-          # Seuls les fichiers modifiés sont envoyés. La base (data/*.db) et les sessions
-          # ne sont jamais écrasées ni supprimées.
+          # Seuls les fichiers modifiés sont envoyés. La base (data/*.db), les sessions et le cache
+          # des actualités ne sont jamais écrasés ni supprimés.
           exclude: |
             **/.git*
             **/.git*/**
@@ -46,4 +46,5 @@ jobs:
             README.md
             config.exemple.php
             data/*.db*
+            data/actualites.json*
             data/sessions/**

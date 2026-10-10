@@ -1,6 +1,7 @@
 "use strict";
 
 const RAFRAICHISSEMENT_MS = 4000;
+const ACTUALITES_MS = 60000; // le serveur relit lui-même les flux de presse toutes les 10 minutes
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -25,6 +26,8 @@ let modeClassement = "joueurs";
 let decalageHorloge = 0; // heure du serveur − heure du navigateur (mesurée à chaque état reçu)
 let historiqueJoueurs = null, chargementStats = false; // courbes des joueurs (onglet Statistiques)
 const historiquesCotes = {}; // courbes des cotes, par pari
+let actualites = null; // articles de presse sur le PLF, rattachés aux paris (chargés à part de l'état)
+let actualitesLiees = false; // accueil : seulement les articles qui parlent d'un pari
 
 // ---------------------------------------------------------------------------
 // Appels serveur
@@ -80,6 +83,17 @@ async function rafraichir() {
     if (premier) suivreAncre();
   } catch {
     $(".direct").classList.add("hors-ligne");
+  }
+}
+
+async function rafraichirActualites() {
+  try {
+    const r = await api("actualites");
+    if (JSON.stringify(r) === JSON.stringify(actualites)) return;
+    actualites = r;
+    if (etat) rendre();
+  } catch {
+    // flux indisponibles : on garde les articles déjà affichés
   }
 }
 
@@ -323,6 +337,56 @@ function blocCommentaires(p) {
     </details>`;
 }
 
+// ---------------------------------------------------------------------------
+// Actualités de la presse
+// ---------------------------------------------------------------------------
+
+const articlesDu = (pariId) => actualites?.articles.filter((a) => a.paris.includes(pariId)) ?? [];
+const articleRecent = (a) => new Date(etat.maintenant) - new Date(a.date) < 2 * 3600e3;
+
+/** Un article : titre (lien vers le journal), source, date ; avec avecParis, les paris en cours dont il parle. */
+function ligneArticle(a, avecParis = true) {
+  const paris = avecParis ? a.paris.map((id) => etat.paris.find((p) => p.id === id)).filter((p) => p?.accepte_mises) : [];
+  return `
+    <li>
+      <a class="article-titre" href="${esc(a.lien)}" target="_blank" rel="noopener noreferrer"${a.resume ? ` title="${esc(a.resume)}"` : ""}>${esc(a.titre)}</a>
+      <div class="article-meta">${articleRecent(a) ? `<span class="badge nouveau">Nouveau</span>` : ""}
+        <span>${esc(a.source)} · ${ilYa(a.date)}</span>
+        ${paris.slice(0, 3).map((p) => `<a class="badge pari-lie" href="#pari-${p.id}" title="Voir le pari">🎲 ${esc(p.titre)}</a>`).join("")}</div>
+    </li>`;
+}
+
+/** Accueil : dernières actualités du PLF, avec les paris dont elles parlent. */
+function blocActualites() {
+  if (!actualites) return "";
+  const articles = actualites.articles.filter((a) => !actualitesLiees || a.paris.some((id) => etat.paris.find((p) => p.id === id)?.accepte_mises));
+  const liste = (l) => `<ul class="liste-articles">${l.map((a) => ligneArticle(a)).join("")}</ul>`;
+  return `
+    <div class="carte-titre titre-section"><h2>📰 L'actu du PLF</h2>
+      <div class="bascule">
+        <button data-action="actualites-filtre" class="${actualitesLiees ? "" : "actif"}">Toutes</button>
+        <button data-action="actualites-filtre" data-liees="1" class="${actualitesLiees ? "actif" : ""}">Liées à un pari</button>
+      </div></div>
+    <div class="carte actualites">
+      ${articles.length ? liste(articles.slice(0, 8)) + (articles.length > 8 ? `
+        <details data-k="actualites-suite"><summary>${pluriel(articles.length - 8, "autre article")}</summary>${liste(articles.slice(8))}</details>` : "")
+        : `<p class="aide">${actualitesLiees ? "Aucun article récent ne parle des paris en cours." : "Aucun article récent pour l'instant."}</p>`}
+      <p class="aide">Titres de la presse (Google Actualités, Public Sénat, LCP, franceinfo, Le Monde, Le Figaro), relus
+        toutes les 10 minutes${actualites.maj ? `, dernière mise à jour ${ilYa(actualites.maj)}` : ""}. 🎲 : paris dont parle l'article.</p>
+    </div>`;
+}
+
+/** Articles qui parlent d'un pari, sous sa carte. */
+function blocPresse(p) {
+  const articles = articlesDu(p.id);
+  if (!articles.length) return "";
+  return `
+    <details class="presse" data-k="pr-${p.id}">
+      <summary>📰 Dans la presse (${articles.length})${articles.some(articleRecent) ? ` <span class="badge nouveau">Nouveau</span>` : ""}</summary>
+      <ul class="liste-articles">${articles.slice(0, 10).map((a) => ligneArticle(a, false)).join("")}</ul>
+    </details>`;
+}
+
 function cartePari(p) {
   const meta = [];
   if (p.date_limite && p.statut === "ouvert" && !p.accepte_mises) meta.push(`Mises closes le ${fmtDate(p.date_limite)}`);
@@ -352,6 +416,7 @@ function cartePari(p) {
       ${p.nb_tardives ? `<p class="aide">⏱ ${pluriel(p.nb_tardives, "mise placée")} après le résultat (connu le ${fmtDate(p.realise_le)}) : remboursée${p.nb_tardives > 1 ? "s" : ""}, hors cagnotte.</p>` : ""}
       ${p.type === "choix" ? `<details class="courbe-cotes" data-k="hc-${p.id}" data-courbe-pari="${p.id}">
         <summary>📈 Évolution des probabilités</summary><div class="graphique"></div></details>` : ""}
+      ${blocPresse(p)}
       ${blocCommentaires(p)}
     </article>`;
 }
@@ -573,7 +638,7 @@ function tuileTendance(t) {
         `<a class="bouton-issue" href="#pari-${p.id}" data-issue-cible="${i.id}">${esc(libelle(i.id))} <b>${pourcent(i.probabilite)}</b></a>`).join("")}
         ${t.issues.length > 4 ? `<span class="aide">+${t.issues.length - 4}</span>` : ""}</div>
       <div class="aide tuile-pied">${nb(p.total_mise)} 🪙 en jeu${t.volume_24h ? ` · ${nb(t.volume_24h)} 🪙 sur 24 h` : ""} · ${pluriel(p.nb_joueurs, "joueur")}
-        ${p.commentaires.length ? ` · 💬 ${p.commentaires.length}` : ""}</div>
+        ${p.commentaires.length ? ` · 💬 ${p.commentaires.length}` : ""}${articlesDu(p.id).length ? ` · 📰 ${articlesDu(p.id).length}` : ""}</div>
     </article>`;
 }
 
@@ -604,6 +669,8 @@ function blocPariDuJour() {
         <button class="lien lien-pari" data-action="copier-lien" data-pari-lien="${p.id}">🔗 Lien</button></div>
       <h2><a href="#pari-${p.id}">${esc(p.titre)}</a></h2>
       ${p.description ? `<p class="desc">${esc(p.description)}</p>` : ""}
+      ${articlesDu(p.id).length ? `<p class="pdj-presse">📰 <a href="${esc(articlesDu(p.id)[0].lien)}" target="_blank" rel="noopener noreferrer">${esc(articlesDu(p.id)[0].titre)}</a>
+        <span class="aide">${esc(articlesDu(p.id)[0].source)} · ${ilYa(articlesDu(p.id)[0].date)}</span></p>` : ""}
       ${etat.bonus.question.montant ? `<p class="pdj-bonus${etat.bonus.question.obtenu ? " obtenu" : ""}">${etat.bonus.question.obtenu
         ? `✅ Vous avez déjà eu aujourd'hui votre bonus de ${nb(etat.bonus.question.montant)} 🪙 pour la question du jour.`
         : `🎁 <b>+${nb(etat.bonus.question.montant)} deniers publics offerts</b> pour votre première mise du jour sur cette question, quelle que soit votre réponse.`}</p>` : ""}
@@ -659,6 +726,8 @@ function vueAccueil() {
     <div class="carte-titre titre-section"><h2>📈 Tendances</h2><button class="lien" data-onglet="ouverts">Tous les paris →</button></div>
     ${tendances.length ? `<div class="grille-tuiles">${tendances.slice(0, 9).map(tuileTendance).join("")}</div>`
       : `<p class="vide">Aucun autre pari ouvert pour l'instant.</p>`}
+
+    ${blocActualites()}
 
     <div class="accueil-colonnes">
       <div class="carte">
@@ -893,6 +962,9 @@ function editionPari(p, actif) {
         </div>
         <label>Étape du calendrier<select data-k="${k}-etape"><option value="">— Aucune —</option>${optionsEtapes(p.etape_id)}</select></label>
         <label>Précisions / règle d'arbitrage<textarea data-k="${k}-desc" rows="2" maxlength="500">${esc(p.description)}</textarea></label>
+        <label>Mots-clés presse <span class="aide">(séparés par des virgules ; « censur* » : tout mot qui commence ainsi ;
+          vide : ${actualites?.themes[p.id]?.length ? `thèmes reconnus dans l'intitulé, ${esc(actualites.themes[p.id].join(", "))}` : "aucun thème reconnu dans l'intitulé"})</span>
+          <input data-k="${k}-mots" maxlength="300" value="${esc(p.mots_cles)}" placeholder="Ex. : Tanguy, blabla"></label>
         ${issues}
         <div><button data-action="admin-maj">Enregistrer les modifications</button></div>
       </div>
@@ -1151,6 +1223,21 @@ function vueAdminReglages() {
       </div>
       <p class="aide">${d.code_invitation ? "Inscription réservée aux personnes qui ont ce code (majuscules indifférentes). Les joueurs déjà inscrits ne sont pas concernés."
         : "⚠ Inscription ouverte à toute personne qui connaît l'adresse du site. Un code d'invitation, diffusé aux seuls collègues, évite les inconnus et les comptes multiples."}</p>
+    </div>
+    <div class="carte">
+      <h2>Actualités de la presse</h2>
+      <div class="actions">
+        <label class="aide recherche-actualites">Recherche Google Actualités <input data-k="r-actualites" maxlength="300" value="${esc(d.actu_recherche)}"></label>
+        <button data-action="admin-actualites">Enregistrer</button>
+        <button class="lien" data-action="admin-actualites-defaut">Revenir à la recherche par défaut</button>
+      </div>
+      <ul class="aide">
+        <li>Syntaxe de Google : guillemets pour une expression exacte, OR entre deux variantes, « -mot » pour exclure.
+          Par défaut : <code>${esc(d.actu_recherche_defaut)}</code> (l'année suit le PLF en cours d'examen).</li>
+        <li>Les flux de Public Sénat, LCP, franceinfo, Le Monde et Le Figaro sont lus en plus, en ne gardant que les articles sur le budget.</li>
+        <li>Un article est rattaché à un pari s'il parle d'un thème reconnu dans son intitulé (49.3, censure, CMP, déficit…)
+          ou de ses mots-clés presse (Paris → Modifier le pari).</li>
+      </ul>
     </div>
     <div class="carte">
       <h2>Équipes</h2>
@@ -1606,7 +1693,7 @@ document.addEventListener("click", async (ev) => {
       const body = {
         titre: champ(`${k}-titre`, carte).value, categorie: champ(`${k}-cat`, carte).value,
         description: champ(`${k}-desc`, carte).value, date_limite: champ(`${k}-date`, carte).value,
-        etape_id: champ(`${k}-etape`, carte).value,
+        etape_id: champ(`${k}-etape`, carte).value, mots_cles: champ(`${k}-mots`, carte).value,
       };
       if (pari.type === "estimation") {
         body.unite = champ(`${k}-unite`, carte).value;
@@ -1618,6 +1705,7 @@ document.addEventListener("click", async (ev) => {
       if (await action(api(`admin/paris/${pariId}/maj`, { body }), "Pari modifié.")) {
         const nouvelle = champ(`${k}-nouvelle`, carte);
         if (nouvelle) nouvelle.value = "";
+        rafraichirActualites(); // les articles rattachés dépendent de l'intitulé et des mots-clés
       }
       break;
     }
@@ -1692,6 +1780,17 @@ document.addEventListener("click", async (ev) => {
       ["r-capital", "r-amorce", "r-bonus", "r-bonus-question"].forEach((k) => (champ(k).value = ""));
       await action(api("admin/reglages", { body: { capital: "", amorce: "", bonus: "", bonus_question: "" } }), "Valeurs par défaut rétablies.");
       break;
+    case "actualites-filtre":
+      actualitesLiees = !!bouton.dataset.liees;
+      return rendre();
+    case "admin-actualites":
+    case "admin-actualites-defaut": {
+      if (bouton.dataset.action === "admin-actualites-defaut") champ("r-actualites").value = "";
+      if (await action(api("admin/reglages", { body: { actu_recherche: champ("r-actualites").value } }), "Recherche enregistrée : articles relus.")) {
+        await rafraichirActualites();
+      }
+      break;
+    }
     case "admin-invitation": {
       const code = champ("r-invitation").value.trim();
       await action(api("admin/reglages", { body: { code_invitation: code } }),
@@ -1841,6 +1940,8 @@ window.addEventListener("hashchange", () => {
 
 reinitialiserFormPari();
 rafraichir();
+rafraichirActualites();
 setInterval(() => { if (!document.hidden) rafraichir(); }, RAFRAICHISSEMENT_MS);
+setInterval(() => { if (!document.hidden) rafraichirActualites(); }, ACTUALITES_MS);
 setInterval(majComptesARebours, 1000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) rafraichir(); });

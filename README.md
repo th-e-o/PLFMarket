@@ -74,6 +74,24 @@ points, mini-courbe sur 30 jours), paris qui ferment bientôt, derniers résulta
   série en cours, meilleur pari, plus grosse perte, trophées, dernières mises (estimations en cours
   jamais dévoilées). Elle figure aussi dans « Mon profil ».
 
+## Actualités de la presse
+
+Bloc « 📰 L'actu du PLF » sur l'accueil (filtre « Toutes / Liées à un pari ») et, sous chaque pari, « 📰 Dans la
+presse » : titres et liens des articles récents (21 jours), sans leur contenu, avec un repère « Nouveau » pendant 2 h.
+
+- **Sources** : recherche Google Actualités (par défaut `"projet de loi de finances" OR "PLF 2027" OR "budget 2027"`,
+  l'année suivant le PLF en cours d'examen, avec les budgets marocain, algérien et tunisien exclus ; modifiable dans
+  Admin → Réglages), plus les flux RSS de Public Sénat, LCP, franceinfo, Le Monde et Le Figaro, dont seuls les articles
+  sur le budget sont gardés (constantes `ACTU_FLUX` et `ACTU_SUJET` d'`api.php`).
+- **Rafraîchissement** : pas de tâche planifiée. Le navigateur demande les articles toutes les minutes ; le serveur
+  relit les flux au plus toutes les 10 minutes (un seul visiteur à la fois, les autres reçoivent la version en cache)
+  et les garde dans `data/actualites.json`. Si aucun flux ne répond, les articles précédents restent affichés.
+- **Lien avec les paris** : un article est rattaché à un pari s'il parle d'un thème reconnu dans l'intitulé ou les
+  précisions du pari (49.3, censure, Conseil constitutionnel, CMP, promulgation / loi spéciale, recettes, déficit,
+  amendements, RN, Sénat : constante `ACTU_THEMES`). L'administration peut remplacer ces thèmes par des mots-clés
+  (Admin → Paris → Modifier le pari → « Mots-clés presse », ex. `Tanguy, blabla` ; `censur*` = tout mot qui commence
+  ainsi). Casse, accents et ponctuation sont ignorés.
+
 ## Bonus et minuteurs
 
 - **Bonus quotidien** (bouton 🎁 en haut de la page et encart de l'accueil) : 100 deniers publics par défaut,
