@@ -152,6 +152,8 @@ function rendre() {
   patch($("#vue-calendrier"), vueCalendrier());
   patch($("#classement"), vueClassement());
   patch($("#fil"), vueFil());
+  $("#actualites").hidden = !actualites;
+  if (actualites) patch($("#actualites"), blocActualites());
   if (etat.admin && etat.donnees_admin) {
     $$("#onglets-admin button").forEach((b) => b.classList.toggle("actif", b.dataset.ongletAdmin === ongletAdmin));
     $$(".vue-admin").forEach((v) => (v.hidden = v.id !== "admin-" + ongletAdmin));
@@ -356,24 +358,21 @@ function ligneArticle(a, avecParis = true) {
     </li>`;
 }
 
-/** Accueil : dernières actualités du PLF, avec les paris dont elles parlent. */
+/** Colonne de droite : dernières actualités du PLF, avec les paris dont elles parlent. */
 function blocActualites() {
-  if (!actualites) return "";
   const articles = actualites.articles.filter((a) => !actualitesLiees || a.paris.some((id) => etat.paris.find((p) => p.id === id)?.accepte_mises));
   const liste = (l) => `<ul class="liste-articles">${l.map((a) => ligneArticle(a)).join("")}</ul>`;
   return `
-    <div class="carte-titre titre-section"><h2>📰 L'actu du PLF</h2>
-      <div class="bascule">
-        <button data-action="actualites-filtre" class="${actualitesLiees ? "" : "actif"}">Toutes</button>
-        <button data-action="actualites-filtre" data-liees="1" class="${actualitesLiees ? "actif" : ""}">Liées à un pari</button>
-      </div></div>
-    <div class="carte actualites">
-      ${articles.length ? liste(articles.slice(0, 8)) + (articles.length > 8 ? `
-        <details data-k="actualites-suite"><summary>${pluriel(articles.length - 8, "autre article")}</summary>${liste(articles.slice(8))}</details>` : "")
-        : `<p class="aide">${actualitesLiees ? "Aucun article récent ne parle des paris en cours." : "Aucun article récent pour l'instant."}</p>`}
-      <p class="aide">Titres de la presse (Google Actualités, Public Sénat, LCP, franceinfo, Le Monde, Le Figaro), relus
-        toutes les 10 minutes${actualites.maj ? `, dernière mise à jour ${ilYa(actualites.maj)}` : ""}. 🎲 : paris dont parle l'article.</p>
-    </div>`;
+    <h2>📰 L'actu du PLF</h2>
+    <div class="bascule">
+      <button data-action="actualites-filtre" class="${actualitesLiees ? "" : "actif"}">Toutes</button>
+      <button data-action="actualites-filtre" data-liees="1" class="${actualitesLiees ? "actif" : ""}">Liées à un pari</button>
+    </div>
+    ${articles.length ? liste(articles.slice(0, 6)) + (articles.length > 6 ? `
+      <details data-k="actualites-suite"><summary>${pluriel(articles.length - 6, "autre article")}</summary>${liste(articles.slice(6))}</details>` : "")
+      : `<p class="aide">${actualitesLiees ? "Aucun article récent ne parle des paris en cours." : "Aucun article récent pour l'instant."}</p>`}
+    <p class="aide">Presse (Google Actualités, Public Sénat, LCP, franceinfo, Le Monde, Le Figaro), relue toutes les
+      10 minutes${actualites.maj ? `, mise à jour ${ilYa(actualites.maj)}` : ""}. 🎲 : paris dont parle l'article.</p>`;
 }
 
 /** Articles qui parlent d'un pari, sous sa carte. */
@@ -726,8 +725,6 @@ function vueAccueil() {
     <div class="carte-titre titre-section"><h2>📈 Tendances</h2><button class="lien" data-onglet="ouverts">Tous les paris →</button></div>
     ${tendances.length ? `<div class="grille-tuiles">${tendances.slice(0, 9).map(tuileTendance).join("")}</div>`
       : `<p class="vide">Aucun autre pari ouvert pour l'instant.</p>`}
-
-    ${blocActualites()}
 
     <div class="accueil-colonnes">
       <div class="carte">

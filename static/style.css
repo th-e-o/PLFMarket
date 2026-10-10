@@ -475,7 +475,9 @@ dialog.fiche h3, .fiche-profil h3 { font-size: .95rem; margin: 1rem 0 .3rem; }
 .toast.succes { background: var(--vert); }
 
 /* Actualités de la presse ------------------------------------------------------ */
-.titre-section .bascule { margin-bottom: 0; }
+.actualites h2 { margin-bottom: .5rem; }
+.actualites .liste-articles { font-size: .88rem; }
+.actualites details .liste-articles { max-height: 24rem; overflow-y: auto; }
 .liste-articles { list-style: none; margin: 0; padding: 0; }
 .liste-articles li { padding: .5rem 0; border-bottom: 1px solid #f0f0f0; overflow-wrap: anywhere; }
 .liste-articles li:last-child { border-bottom: 0; }
@@ -487,7 +489,7 @@ dialog.fiche h3, .fiche-profil h3 { font-size: .95rem; margin: 1rem 0 .3rem; }
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .badge.pari-lie:hover { text-decoration: underline; }
 .actualites details > summary { cursor: pointer; color: var(--bleu); font-size: .88rem; margin-top: .4rem; }
-.actualites > .aide:last-child { margin: .7rem 0 0; }
+.actualites > .aide:last-child { margin: .7rem 0 0; font-size: .78rem; }
 .presse { margin-top: .6rem; }
 .presse > summary { cursor: pointer; color: var(--bleu); font-size: .88rem; }
 .presse .liste-articles { font-size: .9rem; max-height: 22rem; overflow-y: auto; }

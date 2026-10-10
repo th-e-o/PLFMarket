@@ -76,8 +76,8 @@ points, mini-courbe sur 30 jours), paris qui ferment bientôt, derniers résulta
 
 ## Actualités de la presse
 
-Bloc « 📰 L'actu du PLF » sur l'accueil (filtre « Toutes / Liées à un pari ») et, sous chaque pari, « 📰 Dans la
-presse » : titres et liens des articles récents (21 jours), sans leur contenu, avec un repère « Nouveau » pendant 2 h.
+Bloc « 📰 L'actu du PLF » dans la colonne de droite, sous le classement (filtre « Toutes / Liées à un pari ») et,
+sous chaque pari, « 📰 Dans la presse » : titres et liens des articles récents (21 jours), sans leur contenu, avec un repère « Nouveau » pendant 2 h.
 
 - **Sources** : recherche Google Actualités (par défaut `"projet de loi de finances" OR "PLF 2027" OR "budget 2027"`,
   l'année suivant le PLF en cours d'examen, avec les budgets marocain, algérien et tunisien exclus ; modifiable dans
