@@ -1,11 +1,11 @@
-name: Déploiement OVH
+name: Déploiement VPS (plf.deltastat.fr)
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
-concurrency: deploiement-ovh
+concurrency: deploiement-plf
 
 jobs:
   deployer:
@@ -29,22 +29,20 @@ jobs:
       - name: Versionner CSS et JS (contourne le cache des navigateurs)
         run: sed -i "s/__VERSION__/${GITHUB_SHA::8}/g" index.html
 
-      - name: Envoyer sur l'hébergement OVH (FTP)
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
-        with:
-          server: ${{ secrets.FTP_SERVER }}
-          username: ${{ secrets.FTP_USERNAME }}
-          password: ${{ secrets.FTP_PASSWORD }}
-          server-dir: ${{ vars.FTP_DOSSIER || 'www/' }}
-          # Seuls les fichiers modifiés sont envoyés. La base (data/*.db), les sessions et le cache
-          # des actualités ne sont jamais écrasés ni supprimés.
-          exclude: |
-            **/.git*
-            **/.git*/**
-            .github/**
-            scripts/**
-            README.md
-            config.exemple.php
-            data/*.db*
-            data/actualites.json*
-            data/sessions/**
+      - name: Envoyer sur le VPS (rsync)
+        # La clé DEPLOY_SSH_KEY ne peut que lancer rsync dans /srv/plf/web (rrsync côté serveur) :
+        # elle ne peut ni toucher aux autres apps ni exécuter de commande.
+        # data/ (base, sessions, cache des actualités) n'est jamais envoyé, écrasé ni supprimé.
+        env:
+          CLE: ${{ secrets.DEPLOY_SSH_KEY }}
+          HOTES_CONNUS: ${{ vars.DEPLOY_KNOWN_HOSTS }}
+          HOTE: ${{ vars.DEPLOY_HOST || '217.182.169.200' }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$CLE" > ~/.ssh/deploiement && chmod 600 ~/.ssh/deploiement
+          printf '%s\n' "$HOTES_CONNUS" > ~/.ssh/known_hosts
+          rsync -rlptz --delete --chmod=D750,F640 \
+            --exclude='/data/' --exclude='.git*' --exclude='/.github/' --exclude='/scripts/' \
+            --exclude='/ovh-racine/' --exclude='/README.md' --exclude='/config.exemple.php' \
+            -e 'ssh -i ~/.ssh/deploiement -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes' \
+            ./ "plf@$HOTE:/"
