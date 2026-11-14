@@ -1,37 +1,46 @@
-# Les paris du PLF 🪙 — version hébergement web OVH
+# Les paris du PLF 🪙
 
 Site statique (HTML/CSS/JS) + `api.php` (PHP ≥ 8.1). Base de données : un fichier SQLite créé
 automatiquement dans `data/` (rien à configurer), ou MySQL en option.
 
 ## Déploiement automatique (push sur `main` → site à jour)
 
+Le site est servi sur **https://plf.deltastat.fr/** par le VPS (Caddy + PHP-FPM, pool PHP dédié à l'utilisateur
+`plf`, dossier `/srv/plf/web`). Sous-domaine à part : l'app a sa propre origine web, isolée des autres apps de
+deltastat.fr (cookies, stockage local, XSS).
+
 Le workflow [.github/workflows/deploiement.yml](.github/workflows/deploiement.yml) vérifie le PHP,
-génère `config.php` à partir des secrets, puis envoie par FTP les seuls fichiers modifiés.
-La base (`data/*.db`) n'est jamais écrasée.
+génère `config.php` à partir des secrets, puis envoie le site par rsync. La clé de déploiement ne peut que
+lancer rsync dans `/srv/plf/web` (`rrsync` côté serveur). La base (`data/`) n'est jamais envoyée ni écrasée.
 
 À configurer une fois dans GitHub : *Settings → Secrets and variables → Actions*.
 
 | Secret                | Valeur                                                                        |
 |-----------------------|-------------------------------------------------------------------------------|
-| `FTP_SERVER`          | Serveur FTP (espace client OVH → Hébergements → onglet *FTP-SSH*, ex. `ftp.clusterXXX.hosting.ovh.net`) |
-| `FTP_USERNAME`        | Identifiant FTP (même onglet)                                                 |
-| `FTP_PASSWORD`        | Mot de passe FTP (modifiable dans ce même onglet)                             |
+| `DEPLOY_SSH_KEY`      | Clé privée de déploiement (sa clé publique est dans `/srv/plf/.ssh/authorized_keys` du VPS, limitée à rrsync) |
 | `PLF_ADMIN_PASSWORD`  | Mot de passe de l'administration du jeu                                       |
 
+Et la variable `DEPLOY_KNOWN_HOSTS` : empreinte SSH du VPS (`ssh-keyscan -t ed25519 217.182.169.200`).
+Les secrets `FTP_SERVER`, `FTP_USERNAME`, `FTP_PASSWORD` ne servent plus qu'au workflow de migration (racine OVH).
+
 Facultatif :
-- variable `FTP_DOSSIER` (onglet *Variables*) : dossier cible, `www/` par défaut (ex. `www/plf/`, avec le `/` final) ;
+- variable `DEPLOY_HOST` : adresse du VPS, `217.182.169.200` par défaut ;
 - variable `PLF_CAPITAL` : deniers publics de départ (1000 par défaut) ;
 - variable `PLF_AMORCE` : mise fictive de la banque sur chaque issue, qui fixe les cotes de départ
   et leur stabilité (100 par défaut, 0 pour un pari mutuel pur) ;
 - secrets `PLF_DB_DSN`, `PLF_DB_USER`, `PLF_DB_PASSWORD` : utiliser MySQL au lieu de SQLite
   (DSN : `mysql:host=XXX.mysql.db;dbname=XXX;charset=utf8mb4`).
 
-Ensuite : `git push` sur `main` (ou *Actions → Déploiement OVH → Run workflow*).
+Ensuite : `git push` sur `main` (ou *Actions → Déploiement VPS → Run workflow*).
 Administration du jeu : adresse du site suivie de `#admin`.
 
-Côté OVH, une seule chose : activer le certificat SSL (onglet *Informations générales*). Pour un
-sous-domaine dédié (`paris.mondomaine.fr`) : onglet *Multisite* → *Ajouter un domaine*, dossier
-racine identique à `FTP_DOSSIER`.
+Côté serveur : enregistrement DNS `plf.deltastat.fr` → VPS, bloc `/etc/caddy/sites/plf.caddy` (certificat HTTPS
+automatique), pool `/etc/php/8.2/fpm/pool.d/plf.conf`.
+
+La racine `deltastat.fr` (hébergement OVH, `www/`) n'affiche plus qu'une page d'accueil, versionnée dans
+[ovh-racine/](ovh-racine/), qui redirige les anciennes adresses (`deltastat.fr/api.php`, `/static/…`, `/cockpit/…`,
+`/cours-russe/…`) vers les sous-domaines. Elle a été mise en place par le workflow
+[Migration OVH → VPS](.github/workflows/migration-ovh.yml), qui a aussi transféré la base.
 
 ## Administration
 

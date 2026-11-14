@@ -1,0 +1,31 @@
+# Racine de deltastat.fr (hébergement OVH, dossier www/). Envoyé par le workflow « Migration OVH → VPS ».
+# Chaque app a désormais son propre sous-domaine (origine web séparée) : les anciennes adresses y sont redirigées.
+DirectoryIndex index.html
+Options -Indexes
+
+RewriteEngine On
+
+# Forcer le HTTPS
+RewriteCond %{SERVER_PORT} ^80$
+RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]
+
+# Anciennes adresses → sous-domaines (308 : la méthode et le corps des POST sont conservés)
+RewriteRule ^cockpit(/.*)?$ https://cockpit.deltastat.fr$1 [R=308,L]
+RewriteRule ^cours-russe(/.*)?$ https://russe.deltastat.fr$1 [R=308,L]
+RewriteRule ^(api\.php|static/.*)$ https://plf.deltastat.fr/$1 [R=308,L]
+
+# Rien d'autre que la page d'accueil n'est servi ici
+RewriteRule ^(data|scripts)(/|$) - [F,L]
+<FilesMatch "^(config(\.exemple)?\.php|README\.md|\.ovhconfig|\.ftp-deploy-sync-state\.json)$">
+    Require all denied
+</FilesMatch>
+
+<IfModule mod_headers.c>
+    Header always set Strict-Transport-Security "max-age=31536000"
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+    Header always set Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'"
+    <FilesMatch "\.html$">
+        Header set Cache-Control "no-cache"
+    </FilesMatch>
+</IfModule>
